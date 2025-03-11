@@ -5,7 +5,7 @@ target_include_directories(orm PUBLIC .
 )
 
 target_sources(orm PRIVATE
-  ./exceptions.cpp)
+  ./result_set.cpp)
 
 target_link_libraries(orm PRIVATE
   ${MARIADB_CONNECTOR_LIBRARY}
