@@ -9,7 +9,8 @@ target_sources(orm PRIVATE
   ./connection.cpp
   ./transaction.cpp
   ./pool_config.cpp
-  ./connection_pool.cpp)
+  ./connection_pool.cpp
+  ./query_builder.cpp)
 
 target_link_libraries(orm PRIVATE
   ${MARIADB_CONNECTOR_LIBRARY}
