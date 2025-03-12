@@ -11,7 +11,7 @@ include(FindDependencies)
 # 添加子目录
 add_subdirectory(./StarryChat/)
 add_subdirectory(./third_party/)
-add_subdirectory(./example/)
+# add_subdirectory(./example/)
 
 # 安装规则
 install(DIRECTORY include/ DESTINATION include)
