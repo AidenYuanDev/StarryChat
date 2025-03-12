@@ -253,3 +253,48 @@ void ResultSet::forEach(const RowHandler& callback) {
     throw;
   }
 }
+
+template <>
+TimePoint ResultSet::convertToType<TimePoint>(const SqlValue& value) const {
+  return std::visit(
+      [](auto&& arg) -> TimePoint {
+        using U = std::decay_t<decltype(arg)>;
+
+        if constexpr (std::is_same_v<U, std::nullptr_t>) {
+          // Return epoch for NULL values
+          return TimePoint{};
+        } else if constexpr (std::is_same_v<U, TimePoint>) {
+          // Already a TimePoint
+          return arg;
+        } else if constexpr (std::is_same_v<U, std::string>) {
+          // Parse date/time string
+          std::tm tm = {};
+          std::istringstream ss(arg);
+
+          // Try different formats
+          if (arg.size() >= 19) {  // YYYY-MM-DD HH:MM:SS
+            ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+          } else if (arg.size() >= 10) {  // YYYY-MM-DD
+            ss >> std::get_time(&tm, "%Y-%m-%d");
+          } else if (arg.size() >= 8) {  // HH:MM:SS
+            ss >> std::get_time(&tm, "%H:%M:%S");
+          } else {
+            throw std::runtime_error("Unsupported date/time format");
+          }
+
+          if (ss.fail()) {
+            throw std::runtime_error("Failed to parse date/time string: " +
+                                     arg);
+          }
+
+          return std::chrono::system_clock::from_time_t(std::mktime(&tm));
+        } else if constexpr (std::is_integral_v<U>) {
+          // Interpret as Unix timestamp
+          return std::chrono::system_clock::from_time_t(
+              static_cast<time_t>(arg));
+        } else {
+          throw std::bad_variant_access();
+        }
+      },
+      value);
+}

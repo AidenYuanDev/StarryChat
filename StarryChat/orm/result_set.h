@@ -110,8 +110,8 @@ class ResultSet {
         },
         value);
   }
-  template <>
-  TimePoint convertToType<TimePoint>(const SqlValue& value) const;
+  // template <>
+  // TimePoint convertToType<TimePoint>(const SqlValue& value) const;
 };
 
 }  // namespace StarryChat::orm
