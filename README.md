@@ -12,7 +12,6 @@ yay -Sy mariadb-connector-cpp-git
 StarryChat/
 └── orm/
     ├── CMakeLists.txt                   # 构建配置
-    ├── exceptions.h/cpp                 # 异常类定义
     ├── types.h                          # 基本类型定义
     ├── connection.h/cpp                 # 单个数据库连接封装
     ├── connection_pool.h/cpp            # 连接池实现
