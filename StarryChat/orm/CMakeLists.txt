@@ -5,7 +5,8 @@ target_include_directories(orm PUBLIC .
 )
 
 target_sources(orm PRIVATE
-  ./result_set.cpp)
+  ./result_set.cpp
+  ./connection.cpp)
 
 target_link_libraries(orm PRIVATE
   ${MARIADB_CONNECTOR_LIBRARY}
