@@ -27,9 +27,6 @@ enum class QueryType { SELECT, INSERT, UPDATE, DELETE, RAW };
 class QueryBuilder : public std::enable_shared_from_this<QueryBuilder> {
  public:
   using Ptr = std::shared_ptr<QueryBuilder>;
-  // using ParamValue =
-  //     std::variant<std::nullptr_t, int, int64_t, double, std::string, bool>;
-  // 修改ParamValue定义
   using ParamValue = SqlValue;
 
   // 创建新的查询构建器实例
