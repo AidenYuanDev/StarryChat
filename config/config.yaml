@@ -1,0 +1,23 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  threads: 16
+
+database:
+  mariadb:
+    host: "localhost"
+    port: 3306
+    username: "aiden"
+    password: ""
+    database: "chatroom"
+    pool_size: 20
+
+  redis:
+    host: "localhost"
+    port: 6379
+    password: ""
+    db: 0
+    pool_size: 20
+
+logging:
+  level: "info"  # trace, debug, info, warn, error, fatal

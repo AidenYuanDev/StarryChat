@@ -1,10 +1,14 @@
-# 列出所有模块
-set(MODULES
-  # 添加其他模块...
+add_executable(StarryChat)
+
+target_sources(StarryChat PRIVATE
+  ./main.cpp
+  ./config.cpp
 )
 
-# 遍历所有模块并添加它们
-foreach(MODULE ${MODULES})
-    add_subdirectory(${MODULE})
-endforeach()
+target_include_directories(StarryChat PRIVATE .)
 
+target_link_libraries(StarryChat PRIVATE
+  yaml-cpp::yaml-cpp
+  net 
+  log
+)

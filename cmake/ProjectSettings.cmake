@@ -19,5 +19,10 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # 添加编译选项
 add_compile_options(-Wall -Wextra -Wpedantic)
 
+# 复制配置文件到构建目录
+configure_file(${CMAKE_SOURCE_DIR}/config/config.yaml 
+               ${CMAKE_BINARY_DIR}/bin/config.yaml 
+               COPYONLY)
+
 #生成ycm可识别的json文件，让源文件找到头文件
 SET(CMAKE_EXPORT_COMPILE_COMMANDS ON )
