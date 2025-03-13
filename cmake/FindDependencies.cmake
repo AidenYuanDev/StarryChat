@@ -25,3 +25,17 @@ if(MARIADB_CONNECTOR_INCLUDE_DIR AND MARIADB_CONNECTOR_LIBRARY)
 else()
     message(FATAL_ERROR "Could not find MariaDB Connector/C++")
 endif()
+
+# yaml-cpp
+find_package(yaml-cpp REQUIRED)
+
+# include(FetchContent)
+#
+# FetchContent_Declare(
+#   yaml-cpp
+#   GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+#   GIT_TAG <tag_name> # Can be a tag (yaml-cpp-x.x.x), a commit hash, or a branch name (master)
+# )
+# FetchContent_MakeAvailable(yaml-cpp)
+#
+# target_link_libraries(YOUR_LIBRARY PUBLIC yaml-cpp::yaml-cpp) # The library or executable that require yaml-cpp library
