@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package starrychat;
+
+// 用户状态枚举
+enum UserStatus {
+  USER_STATUS_UNKNOWN = 0;  // 未知状态（默认值）
+  USER_STATUS_OFFLINE = 1;  // 离线
+  USER_STATUS_ONLINE = 2;   // 在线
+  USER_STATUS_BUSY = 3;     // 忙碌
+  USER_STATUS_AWAY = 4;     // 离开
+}
+
+// 用户基本信息
+message UserInfo {
+  uint64 id = 1;              // 用户ID
+  string username = 2;        // 用户名（登录名）
+  string nickname = 3;        // 昵称
+  string email = 4;           // 电子邮件
+  string avatar_url = 5;      // 头像URL
+  UserStatus status = 6;      // 用户状态
+  uint64 created_time = 7;    // 账户创建时间（Unix时间戳）
+  uint64 last_login_time = 8; // 最后登录时间（Unix时间戳）
+  // 注意：不包含密码等敏感信息
+}
+
+// 用户简略信息（用于列表展示等场景）
+message UserBrief {
+  uint64 id = 1;              // 用户ID
+  string nickname = 2;        // 昵称
+  UserStatus status = 3;      // 用户状态
+}
+
+// 用户注册请求
+message RegisterUserRequest {
+  string username = 1;        // 用户名
+  string password = 2;        // 密码（传输中应加密）
+  string email = 3;           // 电子邮件
+  string nickname = 4;        // 昵称
+}
+
+// 用户注册响应
+message RegisterUserResponse {
+  bool success = 1;           // 是否成功
+  string error_message = 2;   // 错误信息（如果失败）
+  UserInfo user_info = 3;     // 注册成功的用户信息
+}
+
+// 用户登录请求
+message LoginRequest {
+  string username = 1;        // 用户名
+  string password = 2;        // 密码（传输中应加密）
+}
+
+// 用户登录响应
+message LoginResponse {
+  bool success = 1;           // 是否成功
+  string error_message = 2;   // 错误信息（如果失败）
+  string session_token = 3;   // 会话令牌
+  UserInfo user_info = 4;     // 用户信息
+}
+
+// 用户状态更新消息
+message UserStatusUpdate {
+  uint64 user_id = 1;         // 用户ID
+  UserStatus status = 2;      // 新的状态
+}
+
+// 用户资料更新请求
+message UpdateProfileRequest {
+  uint64 user_id = 1;         // 用户ID
+  string nickname = 2;        // 新昵称（可选）
+  string email = 3;           // 新电子邮件（可选）
+  string avatar_url = 4;      // 新头像URL（可选）
+}
+
+// 用户资料更新响应
+message UpdateProfileResponse {
+  bool success = 1;           // 是否成功
+  string error_message = 2;   // 错误信息（如果失败）
+  UserInfo user_info = 3;     // 更新后的用户信息
+}
+
+// 用户查询请求
+message GetUserRequest {
+  uint64 user_id = 1;         // 用户ID
+}
+
+// 用户查询响应
+message GetUserResponse {
+  bool success = 1;           // 是否成功
+  string error_message = 2;   // 错误信息（如果失败）
+  UserInfo user_info = 3;     // 用户信息
+}
+
+// 好友列表请求
+message GetFriendsRequest {
+  uint64 user_id = 1;         // 用户ID
+}
+
+// 好友列表响应
+message GetFriendsResponse {
+  bool success = 1;           // 是否成功
+  string error_message = 2;   // 错误信息（如果失败）
+  repeated UserBrief friends = 3; // 好友列表
+}
+
+// 用户注销请求
+message LogoutRequest {
+  uint64 user_id = 1;         // 用户ID
+  string session_token = 2;   // 会话令牌
+}
+
+// 用户注销响应
+message LogoutResponse {
+  bool success = 1;           // 是否成功
+  string error_message = 2;   // 错误信息（如果失败）
+}
+
+service UserService {
+  // 用户注册
+  rpc RegisterUser(RegisterUserRequest) returns (RegisterUserResponse) {}
+  
+  // 用户登录
+  rpc Login(LoginRequest) returns (LoginResponse) {}
+  
+  // 获取用户信息
+  rpc GetUser(GetUserRequest) returns (GetUserResponse) {}
+  
+  // 更新用户资料
+  rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse) {}
+  
+  // 获取好友列表
+  rpc GetFriends(GetFriendsRequest) returns (GetFriendsResponse) {}
+  
+  // 用户注销
+  rpc Logout(LogoutRequest) returns (LogoutResponse) {}
+  
+  // 用户状态更新
+  rpc UpdateStatus(UserStatusUpdate) returns (UserInfo) {}
+}

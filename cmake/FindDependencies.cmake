@@ -14,6 +14,10 @@ include(FetchContent)
 # set(BUILD_GTEST ON CACHE BOOL "" FORCE)
 # FetchContent_MakeAvailable(googletest)
 
+# 添加 protobuf 
+find_package(Protobuf REQUIRED)
+include_directories(${Protobuf_INCLUDE_DIRS})
+
 # mariadb-connector-cpp
 find_path(MARIADB_CONNECTOR_INCLUDE_DIR mariadb/conncpp.hpp
           PATHS /usr/include)
