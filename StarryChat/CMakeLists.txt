@@ -45,6 +45,7 @@ target_include_directories(StarryChat PRIVATE
 
 target_link_libraries(StarryChat PRIVATE
   ${Protobuf_LIBRARIES}
+  OpenSSL::Crypto
   yaml-cpp::yaml-cpp
   rpc
 )

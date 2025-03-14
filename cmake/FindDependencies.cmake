@@ -18,6 +18,9 @@ include(FetchContent)
 find_package(Protobuf REQUIRED)
 include_directories(${Protobuf_INCLUDE_DIRS})
 
+# OpenSSL
+find_package(OpenSSL REQUIRED)
+
 # mariadb-connector-cpp
 find_path(MARIADB_CONNECTOR_INCLUDE_DIR mariadb/conncpp.hpp
           PATHS /usr/include)
