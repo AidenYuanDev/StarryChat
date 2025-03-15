@@ -1,7 +1,7 @@
 #include <yaml-cpp/node/parse.h>
 #include <cctype>
-#include "logging.h"
 #include "config.h"
+#include "logging.h"
 
 using namespace StarryChat;
 
@@ -120,15 +120,20 @@ bool Config::loadConfig(const std::string& configFilePath) {
     return false;
   }
 
-  std::string Level_ = configFile_["logging"]["level"].as<std::string>();
+  std::string logger_level =
+      to_lower(configFile_["logging"]["level"].as<std::string>());
 
-  // 验证日志级别
-  std::vector<std::string> validLevels = {"trace", "debug", "info",
-                                          "warn",  "error", "fatal"};
-  if (std::find(validLevels.begin(), validLevels.end(),
-                to_lower(Level_)) == validLevels.end()) {
-    LOG_ERROR << "Invalid logging level: " << loggingLevel_;
-    return false;
+  std::map<std::string, starry::LogLevel> st_to_level = {
+      {"trace", starry::LogLevel::TRACE},
+      {"debug", starry::LogLevel::DEBUG},
+      {"info", starry::LogLevel::INFO},
+      {"warn", starry::LogLevel::WARN},
+      {"fatal", starry::LogLevel::FATAL}};
+
+  if (st_to_level.find(logger_level) == st_to_level.end()) {
+    LOG_ERROR << "Invalid logging level: " << logger_level;
+  } else {
+    loggingLevel_ = st_to_level[logger_level];
   }
 
   return valiConfig();
