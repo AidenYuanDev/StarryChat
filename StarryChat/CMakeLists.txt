@@ -14,6 +14,8 @@ set(GENERATED_PB_FILES
     ${PROTO_OUT_DIR}/user.pb.h 
     ${PROTO_OUT_DIR}/message.pb.cc 
     ${PROTO_OUT_DIR}/message.pb.h 
+    ${PROTO_OUT_DIR}/chat.pb.cc 
+    ${PROTO_OUT_DIR}/chat.pb.h 
 )
 
 # 自定义命令生成 protobuf 文件

@@ -1,0 +1,228 @@
+syntax = "proto3";
+
+package starrychat;
+
+// 导入用户和消息相关定义
+import "user.proto";
+import "message.proto";
+
+// 聊天室成员角色枚举
+enum MemberRole {
+  MEMBER_ROLE_UNKNOWN = 0;   // 未知角色（默认值）
+  MEMBER_ROLE_OWNER = 1;     // 所有者/创建者
+  MEMBER_ROLE_ADMIN = 2;     // 管理员
+  MEMBER_ROLE_MEMBER = 3;    // 普通成员
+}
+
+// 聊天室信息
+message ChatRoom {
+  uint64 id = 1;                 // 聊天室ID
+  string name = 2;               // 聊天室名称
+  string description = 3;        // 聊天室描述
+  uint64 creator_id = 4;         // 创建者ID
+  uint64 created_time = 5;       // 创建时间戳
+  uint64 member_count = 6;       // 成员数量
+  string avatar_url = 7;         // 聊天室头像URL
+}
+
+// 聊天室成员信息
+message ChatRoomMember {
+  uint64 chat_room_id = 1;       // 聊天室ID
+  uint64 user_id = 2;            // 用户ID
+  MemberRole role = 3;           // 成员角色
+  uint64 join_time = 4;          // 加入时间戳
+  string display_name = 5;       // 在聊天室中的显示名（可选）
+}
+
+// 私聊信息
+message PrivateChat {
+  uint64 id = 1;                 // 私聊ID
+  uint64 user1_id = 2;           // 用户1 ID
+  uint64 user2_id = 3;           // 用户2 ID
+  uint64 created_time = 4;       // 创建时间戳
+  uint64 last_message_time = 5;  // 最后一条消息时间戳
+}
+
+// 聊天摘要（用于展示聊天列表）
+message ChatSummary {
+  uint64 id = 1;                 // 聊天ID
+  ChatType type = 2;             // 聊天类型（私聊/群聊）
+  string name = 3;               // 聊天名称
+  string avatar_url = 4;         // 头像URL
+  uint64 last_message_time = 5;  // 最后一条消息时间戳
+  string last_message_preview = 6; // 最后一条消息预览
+  uint64 unread_count = 7;       // 未读消息数量
+}
+
+// 创建聊天室请求
+message CreateChatRoomRequest {
+  uint64 creator_id = 1;         // 创建者ID
+  string name = 2;               // 聊天室名称
+  string description = 3;        // 聊天室描述（可选）
+  string avatar_url = 4;         // 聊天室头像URL（可选）
+  repeated uint64 initial_member_ids = 5; // 初始成员ID列表
+}
+
+// 创建聊天室响应
+message CreateChatRoomResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+  ChatRoom chat_room = 3;        // 创建的聊天室信息
+}
+
+// 获取聊天室信息请求
+message GetChatRoomRequest {
+  uint64 chat_room_id = 1;       // 聊天室ID
+  uint64 user_id = 2;            // 请求用户ID
+}
+
+// 获取聊天室信息响应
+message GetChatRoomResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+  ChatRoom chat_room = 3;        // 聊天室信息
+  repeated ChatRoomMember members = 4; // 成员列表
+}
+
+// 更新聊天室信息请求
+message UpdateChatRoomRequest {
+  uint64 chat_room_id = 1;       // 聊天室ID
+  uint64 user_id = 2;            // 请求用户ID
+  string name = 3;               // 更新的名称（可选）
+  string description = 4;        // 更新的描述（可选）
+  string avatar_url = 5;         // 更新的头像URL（可选）
+}
+
+// 更新聊天室信息响应
+message UpdateChatRoomResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+  ChatRoom chat_room = 3;        // 更新后的聊天室信息
+}
+
+// 添加聊天室成员请求
+message AddChatRoomMemberRequest {
+  uint64 chat_room_id = 1;       // 聊天室ID
+  uint64 operator_id = 2;        // 操作者ID
+  repeated uint64 user_ids = 3;  // 要添加的用户ID列表
+}
+
+// 添加聊天室成员响应
+message AddChatRoomMemberResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+  repeated ChatRoomMember members = 3; // 添加的成员信息
+}
+
+// 移除聊天室成员请求
+message RemoveChatRoomMemberRequest {
+  uint64 chat_room_id = 1;       // 聊天室ID
+  uint64 operator_id = 2;        // 操作者ID
+  repeated uint64 user_ids = 3;  // 要移除的用户ID列表
+}
+
+// 移除聊天室成员响应
+message RemoveChatRoomMemberResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+}
+
+// 更新成员角色请求
+message UpdateMemberRoleRequest {
+  uint64 chat_room_id = 1;       // 聊天室ID
+  uint64 operator_id = 2;        // 操作者ID
+  uint64 user_id = 3;            // 目标用户ID
+  MemberRole new_role = 4;       // 新角色
+}
+
+// 更新成员角色响应
+message UpdateMemberRoleResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+  ChatRoomMember member = 3;     // 更新后的成员信息
+}
+
+// 退出聊天室请求
+message LeaveChatRoomRequest {
+  uint64 chat_room_id = 1;       // 聊天室ID
+  uint64 user_id = 2;            // 用户ID
+}
+
+// 退出聊天室响应
+message LeaveChatRoomResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+}
+
+// 解散聊天室请求
+message DissolveChatRoomRequest {
+  uint64 chat_room_id = 1;       // 聊天室ID
+  uint64 user_id = 2;            // 请求用户ID（必须是所有者）
+}
+
+// 解散聊天室响应
+message DissolveChatRoomResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+}
+
+// 创建私聊请求
+message CreatePrivateChatRequest {
+  uint64 initiator_id = 1;       // 发起者ID
+  uint64 receiver_id = 2;        // 接收者ID
+}
+
+// 创建私聊响应
+message CreatePrivateChatResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+  PrivateChat private_chat = 3;  // 创建的私聊信息
+}
+
+// 获取私聊信息请求
+message GetPrivateChatRequest {
+  uint64 private_chat_id = 1;    // 私聊ID
+  uint64 user_id = 2;            // 请求用户ID
+}
+
+// 获取私聊信息响应
+message GetPrivateChatResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+  PrivateChat private_chat = 3;  // 私聊信息
+  UserInfo partner_info = 4;     // 对方用户信息
+}
+
+// 获取用户聊天列表请求
+message GetUserChatsRequest {
+  uint64 user_id = 1;            // 用户ID
+}
+
+// 获取用户聊天列表响应
+message GetUserChatsResponse {
+  bool success = 1;              // 是否成功
+  string error_message = 2;      // 错误信息
+  repeated ChatSummary chats = 3; // 聊天摘要列表
+}
+
+// 聊天服务定义
+service ChatService {
+  // 聊天室操作
+  rpc CreateChatRoom(CreateChatRoomRequest) returns (CreateChatRoomResponse) {}
+  rpc GetChatRoom(GetChatRoomRequest) returns (GetChatRoomResponse) {}
+  rpc UpdateChatRoom(UpdateChatRoomRequest) returns (UpdateChatRoomResponse) {}
+  rpc DissolveChatRoom(DissolveChatRoomRequest) returns (DissolveChatRoomResponse) {}
+  
+  // 聊天室成员管理
+  rpc AddChatRoomMember(AddChatRoomMemberRequest) returns (AddChatRoomMemberResponse) {}
+  rpc RemoveChatRoomMember(RemoveChatRoomMemberRequest) returns (RemoveChatRoomMemberResponse) {}
+  rpc UpdateMemberRole(UpdateMemberRoleRequest) returns (UpdateMemberRoleResponse) {}
+  rpc LeaveChatRoom(LeaveChatRoomRequest) returns (LeaveChatRoomResponse) {}
+  
+  // 私聊操作
+  rpc CreatePrivateChat(CreatePrivateChatRequest) returns (CreatePrivateChatResponse) {}
+  rpc GetPrivateChat(GetPrivateChatRequest) returns (GetPrivateChatResponse) {}
+  
+  // 聊天列表
+  rpc GetUserChats(GetUserChatsRequest) returns (GetUserChatsResponse) {}
+}
