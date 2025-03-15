@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <mariadb/conncpp.hpp>
-#include <sstream>
 #include "db_manager.h"
 #include "logging.h"
 #include "message.h"
