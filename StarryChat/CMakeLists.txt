@@ -51,12 +51,14 @@ target_include_directories(StarryChat PRIVATE
   ${PROTO_OUT_DIR}
   ${HIREDIS_HEADER}
   ${REDIS_PLUS_PLUS_HEADER}
+  ${MARIADB_CONNECTOR_INCLUDE_DIR}
 )
 
 target_link_libraries(StarryChat PRIVATE
   ${Protobuf_LIBRARIES}
   ${HIREDIS_LIB}
   ${REDIS_PLUS_PLUS_LIB}
+  ${MARIADB_CONNECTOR_LIBRARY}
   OpenSSL::Crypto
   yaml-cpp::yaml-cpp
   rpc
