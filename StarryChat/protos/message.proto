@@ -1,0 +1,211 @@
+syntax = "proto3";
+
+package starrychat;
+
+// 消息类型枚举
+enum MessageType {
+  MESSAGE_TYPE_UNKNOWN = 0;    // 未知类型（默认值）
+  MESSAGE_TYPE_TEXT = 1;       // 文本消息
+  MESSAGE_TYPE_IMAGE = 2;      // 图片消息
+  MESSAGE_TYPE_FILE = 3;       // 文件消息
+  MESSAGE_TYPE_AUDIO = 4;      // 语音消息
+  MESSAGE_TYPE_VIDEO = 5;      // 视频消息
+  MESSAGE_TYPE_LOCATION = 6;   // 位置消息
+  MESSAGE_TYPE_SYSTEM = 7;     // 系统消息
+  MESSAGE_TYPE_RECALL = 8;     // 撤回消息通知
+}
+
+// 聊天类型枚举
+enum ChatType {
+  CHAT_TYPE_UNKNOWN = 0;       // 未知类型（默认值）
+  CHAT_TYPE_PRIVATE = 1;       // 私聊
+  CHAT_TYPE_GROUP = 2;         // 群聊
+}
+
+// 消息状态枚举
+enum MessageStatus {
+  MESSAGE_STATUS_UNKNOWN = 0;  // 未知状态（默认值）
+  MESSAGE_STATUS_SENDING = 1;  // 发送中
+  MESSAGE_STATUS_SENT = 2;     // 已发送
+  MESSAGE_STATUS_DELIVERED = 3;// 已送达
+  MESSAGE_STATUS_READ = 4;     // 已读
+  MESSAGE_STATUS_FAILED = 5;   // 发送失败
+  MESSAGE_STATUS_RECALLED = 6; // 已撤回
+}
+
+// 基本消息结构
+message Message {
+  uint64 id = 1;               // 消息ID
+  uint64 sender_id = 2;        // 发送者ID
+  ChatType chat_type = 3;      // 聊天类型（私聊/群聊）
+  uint64 chat_id = 4;          // 聊天ID（私聊ID或群聊ID）
+  MessageType type = 5;        // 消息类型
+  uint64 timestamp = 6;        // 发送时间戳
+  MessageStatus status = 7;    // 消息状态
+  
+  // 消息内容 - 使用oneof处理不同类型的消息内容
+  oneof content {
+    TextContent text = 10;             // 文本内容
+    ImageContent image = 11;           // 图片内容
+    FileContent file = 12;             // 文件内容
+    AudioContent audio = 13;           // 语音内容
+    VideoContent video = 14;           // 视频内容
+    LocationContent location = 15;     // 位置内容
+    SystemContent system = 16;         // 系统消息内容
+    RecallContent recall = 17;         // 撤回消息内容
+  }
+  
+  // 关联信息
+  uint64 reply_to_id = 20;             // 回复的消息ID（可选）
+  repeated uint64 mention_user_ids = 21; // @的用户ID列表（可选）
+}
+
+// 文本消息内容
+message TextContent {
+  string text = 1;             // 文本内容
+}
+
+// 图片消息内容
+message ImageContent {
+  string url = 1;              // 图片URL
+  string thumbnail_url = 2;    // 缩略图URL
+  int32 width = 3;             // 宽度（像素）
+  int32 height = 4;            // 高度（像素）
+  string format = 5;           // 图片格式（jpg, png等）
+  int64 size = 6;              // 文件大小（字节）
+}
+
+// 文件消息内容
+message FileContent {
+  string url = 1;              // 文件URL
+  string name = 2;             // 文件名
+  string format = 3;           // 文件格式
+  int64 size = 4;              // 文件大小（字节）
+}
+
+// 语音消息内容
+message AudioContent {
+  string url = 1;              // 语音URL
+  int32 duration = 2;          // 时长（秒）
+  string format = 3;           // 音频格式（mp3, wav等）
+  int64 size = 4;              // 文件大小（字节）
+}
+
+// 视频消息内容
+message VideoContent {
+  string url = 1;              // 视频URL
+  string thumbnail_url = 2;    // 缩略图URL
+  int32 width = 3;             // 宽度（像素）
+  int32 height = 4;            // 高度（像素）
+  int32 duration = 5;          // 时长（秒）
+  string format = 6;           // 视频格式（mp4等）
+  int64 size = 7;              // 文件大小（字节）
+}
+
+// 位置消息内容
+message LocationContent {
+  double latitude = 1;         // 纬度
+  double longitude = 2;        // 经度
+  string title = 3;            // 位置标题
+  string address = 4;          // 地址文本描述
+}
+
+// 系统消息内容
+message SystemContent {
+  string text = 1;             // 系统消息文本
+  string code = 2;             // 系统消息代码（用于客户端识别特定类型）
+  map<string, string> params = 3; // 额外参数
+}
+
+// 撤回消息内容
+message RecallContent {
+  uint64 recalled_msg_id = 1;  // 被撤回的消息ID
+}
+
+// 消息历史查询请求
+message GetMessagesRequest {
+  uint64 user_id = 1;          // 请求用户ID
+  ChatType chat_type = 2;      // 聊天类型
+  uint64 chat_id = 3;          // 聊天ID
+  uint64 start_time = 4;       // 开始时间戳（可选）
+  uint64 end_time = 5;         // 结束时间戳（可选）
+  uint64 before_msg_id = 6;    // 在此消息ID之前（用于分页）
+  int32 limit = 7;             // 最大返回消息数
+}
+
+// 消息历史查询响应
+message GetMessagesResponse {
+  bool success = 1;            // 是否成功
+  string error_message = 2;    // 错误信息
+  repeated Message messages = 3; // 消息列表
+  bool has_more = 4;           // 是否有更多消息
+}
+
+// 发送消息请求
+message SendMessageRequest {
+  uint64 sender_id = 1;        // 发送者ID
+  ChatType chat_type = 2;      // 聊天类型
+  uint64 chat_id = 3;          // 聊天ID
+  MessageType type = 4;        // 消息类型
+  
+  // 消息内容
+  oneof content {
+    TextContent text = 10;
+    ImageContent image = 11;
+    FileContent file = 12;
+    AudioContent audio = 13;
+    VideoContent video = 14;
+    LocationContent location = 15;
+  }
+  
+  // 关联信息
+  uint64 reply_to_id = 20;     // 回复的消息ID（可选）
+  repeated uint64 mention_user_ids = 21; // @的用户ID列表（可选）
+}
+
+// 发送消息响应
+message SendMessageResponse {
+  bool success = 1;            // 是否成功
+  string error_message = 2;    // 错误信息
+  Message message = 3;         // 完整的消息对象（包含服务器分配的ID、时间戳等）
+}
+
+// 更新消息状态请求
+message UpdateMessageStatusRequest {
+  uint64 user_id = 1;          // 用户ID
+  uint64 message_id = 2;       // 消息ID
+  MessageStatus status = 3;    // 新状态
+}
+
+// 更新消息状态响应
+message UpdateMessageStatusResponse {
+  bool success = 1;            // 是否成功
+  string error_message = 2;    // 错误信息
+}
+
+// 撤回消息请求
+message RecallMessageRequest {
+  uint64 user_id = 1;          // 请求撤回的用户ID
+  uint64 message_id = 2;       // 要撤回的消息ID
+}
+
+// 撤回消息响应
+message RecallMessageResponse {
+  bool success = 1;            // 是否成功
+  string error_message = 2;    // 错误信息
+}
+
+// 消息服务定义
+service MessageService {
+  // 获取消息历史
+  rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse) {}
+  
+  // 发送消息
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {}
+  
+  // 更新消息状态
+  rpc UpdateMessageStatus(UpdateMessageStatusRequest) returns (UpdateMessageStatusResponse) {}
+  
+  // 撤回消息
+  rpc RecallMessage(RecallMessageRequest) returns (RecallMessageResponse) {}
+}

@@ -12,6 +12,8 @@ set(PLUGIN_PATH ${CMAKE_BINARY_DIR}/bin/gen-cpp-plugin)
 set(GENERATED_PB_FILES
     ${PROTO_OUT_DIR}/user.pb.cc 
     ${PROTO_OUT_DIR}/user.pb.h 
+    ${PROTO_OUT_DIR}/message.pb.cc 
+    ${PROTO_OUT_DIR}/message.pb.h 
 )
 
 # 自定义命令生成 protobuf 文件
