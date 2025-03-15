@@ -111,7 +111,7 @@ void UserServiceImpl::Login(const starrychat::LoginRequestPtr& request,
     }
 
     // 创建用户对象并验证密码
-    User user(rs->getUInt64("id"), rs->getString("username"));
+    User user(rs->getUInt64("id"), std::string(rs->getString("username")));
     // ...设置其他字段
 
     if (!user.verifyPassword(request->password())) {
@@ -171,7 +171,7 @@ void UserServiceImpl::GetUser(
     std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
     if (rs->next()) {
       // 从数据库结果创建用户对象
-      User user(rs->getUInt64("id"), rs->getString("username"));
+      User user(rs->getUInt64("id"), std::string(rs->getString("username")));
       // ...设置其他字段
 
       // 设置响应
@@ -262,7 +262,7 @@ void UserServiceImpl::UpdateProfile(
 
       std::unique_ptr<sql::ResultSet> rs(selectStmt->executeQuery());
       if (rs->next()) {
-        User user(rs->getUInt64("id"), rs->getString("username"));
+        User user(rs->getUInt64("id"), std::string(rs->getString("username")));
         // ...设置其他字段
 
         response->set_success(true);
@@ -400,7 +400,7 @@ void UserServiceImpl::UpdateStatus(
 
       std::unique_ptr<sql::ResultSet> rs(selectStmt->executeQuery());
       if (rs->next()) {
-        User user(rs->getUInt64("id"), rs->getString("username"));
+        User user(rs->getUInt64("id"), std::string(rs->getString("username")));
         // ...设置其他字段
 
         *response = user.toProto();

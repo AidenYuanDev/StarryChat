@@ -93,6 +93,10 @@ class Message {
   // 调试辅助
   std::string toString() const;
 
+  void setSenderId(uint64_t senderId) { senderId_ = senderId; }
+  void setChatType(ChatType chatType) { chatType_ = chatType; }
+  void setChatId(uint64_t chatId) { chatId_ = chatId; }
+
  private:
   uint64_t id_{0};
   uint64_t senderId_{0};

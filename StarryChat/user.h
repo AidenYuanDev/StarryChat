@@ -43,6 +43,7 @@ class User {
   void setLastLoginTime(time_t time) { lastLoginTime_ = time; }
   void incrementLoginAttempts() { ++loginAttempts_; }
   void resetLoginAttempts() { loginAttempts_ = 0; }
+  void setId(uint64_t id) { id_ = id; }
 
   // 密码相关
   bool verifyPassword(const std::string& password) const;

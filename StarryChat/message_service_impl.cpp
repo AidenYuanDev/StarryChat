@@ -93,13 +93,12 @@ void MessageServiceImpl::GetMessages(
 
       // 根据消息类型设置内容
       if (message.isTextMessage()) {
-        message.setText(rs->getString("content"));
+        message.setText(std::string(rs->getString("content")));
       } else if (message.isSystemMessage()) {
         // 处理系统消息，这里需要根据实际格式解析
         // 简化处理，假设系统消息内容直接存储
-        message.setSystemMessage(rs->getString("content"),
-                                 rs->getString("system_code"),
-                                 {});  // 参数需要另外查询或解析
+        message.setSystemMessage(std::string(rs->getString("content")),
+                                 std::string(rs->getString("system_code")), {});
       }
 
       // 处理回复和提及

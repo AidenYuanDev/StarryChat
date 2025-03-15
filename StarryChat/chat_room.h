@@ -38,6 +38,8 @@ class ChatRoom {
   void setDescription(const std::string& description) {
     description_ = description;
   }
+  void setCreatorId(uint64_t creatorId) { creatorId_ = creatorId; }
+  void setCreatedTime(uint64_t createdTime) { createdTime_ = createdTime; }
 
   uint64_t getCreatorId() const { return creatorId_; }
 

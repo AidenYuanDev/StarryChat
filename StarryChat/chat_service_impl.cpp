@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <chrono>
 #include <mariadb/conncpp.hpp>
-#include <sstream>
 #include "chat_room.h"
 #include "db_manager.h"
 #include "logging.h"
@@ -54,12 +53,12 @@ void ChatServiceImpl::CreateChatRoom(
         if (rs->next()) {
           ChatRoom chatRoom;
           chatRoom.setId(rs->getUInt64("id"));
-          chatRoom.setName(rs->getString("name"));
-          chatRoom.setDescription(rs->getString("description"));
+          chatRoom.setName(std::string(rs->getString("name")));
+          chatRoom.setDescription(std::string(rs->getString("description")));
           chatRoom.setCreatorId(rs->getUInt64("creator_id"));
           chatRoom.setCreatedTime(rs->getUInt64("created_time"));
           chatRoom.setMemberCount(rs->getUInt64("member_count"));
-          chatRoom.setAvatarUrl(rs->getString("avatar_url"));
+          chatRoom.setAvatarUrl(std::string(rs->getString("avatar_url")));
 
           // 设置响应
           response->set_success(true);
@@ -116,12 +115,12 @@ void ChatServiceImpl::GetChatRoom(
     if (rs->next()) {
       ChatRoom chatRoom;
       chatRoom.setId(rs->getUInt64("id"));
-      chatRoom.setName(rs->getString("name"));
-      chatRoom.setDescription(rs->getString("description"));
+      chatRoom.setName(std::string(rs->getString("name")));
+      chatRoom.setDescription(std::string(rs->getString("description")));
       chatRoom.setCreatorId(rs->getUInt64("creator_id"));
       chatRoom.setCreatedTime(rs->getUInt64("created_time"));
       chatRoom.setMemberCount(rs->getUInt64("member_count"));
-      chatRoom.setAvatarUrl(rs->getString("avatar_url"));
+      chatRoom.setAvatarUrl(std::string(rs->getString("avatar_url")));
 
       response->set_success(true);
       *response->mutable_chat_room() = chatRoom.toProto();
@@ -142,9 +141,10 @@ void ChatServiceImpl::GetChatRoom(
             static_cast<starrychat::MemberRole>(memberRs->getInt("role")));
         member->set_join_time(memberRs->getUInt64("join_time"));
 
-        std::string displayName = memberRs->getString("display_name");
+        std::string displayName =
+            std::string(memberRs->getString("display_name"));
         if (displayName.empty()) {
-          displayName = memberRs->getString("nickname");
+          displayName = std::string(memberRs->getString("nickname"));
         }
         member->set_display_name(displayName);
       }
@@ -243,12 +243,12 @@ void ChatServiceImpl::UpdateChatRoom(
       if (rs->next()) {
         ChatRoom chatRoom;
         chatRoom.setId(rs->getUInt64("id"));
-        chatRoom.setName(rs->getString("name"));
-        chatRoom.setDescription(rs->getString("description"));
+        chatRoom.setName(std::string(rs->getString("name")));
+        chatRoom.setDescription(std::string(rs->getString("description")));
         chatRoom.setCreatorId(rs->getUInt64("creator_id"));
         chatRoom.setCreatedTime(rs->getUInt64("created_time"));
         chatRoom.setMemberCount(rs->getUInt64("member_count"));
-        chatRoom.setAvatarUrl(rs->getString("avatar_url"));
+        chatRoom.setAvatarUrl(std::string(rs->getString("avatar_url")));
 
         // 设置响应
         response->set_success(true);
@@ -528,9 +528,9 @@ void ChatServiceImpl::UpdateMemberRole(
             static_cast<starrychat::MemberRole>(rs->getInt("role")));
         member->set_join_time(rs->getUInt64("join_time"));
 
-        std::string displayName = rs->getString("display_name");
+        std::string displayName = std::string(rs->getString("display_name"));
         if (displayName.empty()) {
-          displayName = rs->getString("nickname");
+          displayName = std::string(rs->getString("nickname"));
         }
         member->set_display_name(displayName);
 
@@ -1102,15 +1102,15 @@ starrychat::ChatSummary ChatServiceImpl::getChatSummary(
       std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
       if (rs->next()) {
         uint64_t user1Id = rs->getUInt64("user1_id");
-        uint64_t user2Id = rs->getUInt64("user2_id");
+        // uint64_t user2Id = rs->getUInt64("user2_id");
 
         // 使用对方的信息
         if (userId == user1Id) {
-          summary.set_name(rs->getString("nick2"));
-          summary.set_avatar_url(rs->getString("avatar2"));
+          summary.set_name(std::string(rs->getString("nick2")));
+          summary.set_avatar_url(std::string(rs->getString("avatar2")));
         } else {
-          summary.set_name(rs->getString("nick1"));
-          summary.set_avatar_url(rs->getString("avatar1"));
+          summary.set_name(std::string(rs->getString("nick1")));
+          summary.set_avatar_url(std::string(rs->getString("avatar1")));
         }
 
         if (!rs->isNull("last_message_time")) {
@@ -1127,8 +1127,8 @@ starrychat::ChatSummary ChatServiceImpl::getChatSummary(
 
       std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
       if (rs->next()) {
-        summary.set_name(rs->getString("name"));
-        summary.set_avatar_url(rs->getString("avatar_url"));
+        summary.set_name(std::string(rs->getString("name")));
+        summary.set_avatar_url(std::string(rs->getString("avatar_url")));
 
         if (!rs->isNull("last_message_time")) {
           summary.set_last_message_time(rs->getUInt64("last_message_time"));
@@ -1172,14 +1172,14 @@ std::string ChatServiceImpl::getLastMessagePreview(starrychat::ChatType type,
           static_cast<starrychat::MessageType>(rs->getInt("type"));
 
       if (msgType == starrychat::MESSAGE_TYPE_TEXT) {
-        std::string content = rs->getString("content");
+        std::string content = std::string(rs->getString("content"));
         // 限制预览长度
         if (content.length() > 30) {
           content = content.substr(0, 27) + "...";
         }
         return content;
       } else if (msgType == starrychat::MESSAGE_TYPE_SYSTEM) {
-        return "[System: " + rs->getString("system_code") + "]";
+        return "[System: " + std::string(rs->getString("system_code")) + "]";
       } else if (msgType == starrychat::MESSAGE_TYPE_IMAGE) {
         return "[Image]";
       } else if (msgType == starrychat::MESSAGE_TYPE_FILE) {
