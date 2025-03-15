@@ -39,16 +39,24 @@ target_sources(StarryChat PRIVATE
   ${GENERATED_PB_FILES}  # 将生成的文件添加到库中
   ./main.cpp
   ./config.cpp
+  ./user.cpp
+  ./message.cpp
+  ./chat_room.cpp
+  ./db_manager.cpp
 )
 
 target_include_directories(StarryChat PRIVATE 
   .
   ${Protobuf_INCLUDE_DIRS}
   ${PROTO_OUT_DIR}
+  ${HIREDIS_HEADER}
+  ${REDIS_PLUS_PLUS_HEADER}
 )
 
 target_link_libraries(StarryChat PRIVATE
   ${Protobuf_LIBRARIES}
+  ${HIREDIS_LIB}
+  ${REDIS_PLUS_PLUS_LIB}
   OpenSSL::Crypto
   yaml-cpp::yaml-cpp
   rpc
