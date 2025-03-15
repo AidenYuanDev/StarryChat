@@ -45,6 +45,8 @@ target_sources(StarryChat PRIVATE
   ./db_manager.cpp
   ./redis_manager.cpp
   ./user_service_impl.cpp
+  ./chat_service_impl.cpp
+  ./message_service_impl.cpp
 )
 
 target_include_directories(StarryChat PRIVATE 
