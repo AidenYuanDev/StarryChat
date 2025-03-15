@@ -1,7 +1,7 @@
 #include <yaml-cpp/node/parse.h>
 #include <cctype>
-#include "config.h"
 #include "logging.h"
+#include "config.h"
 
 using namespace StarryChat;
 
@@ -119,7 +119,17 @@ bool Config::loadConfig(const std::string& configFilePath) {
     LOG_ERROR << "config file not set logging level";
     return false;
   }
-  loggingLevel_ = configFile_["logging"]["level"].as<std::string>();
+
+  std::string Level_ = configFile_["logging"]["level"].as<std::string>();
+
+  // 验证日志级别
+  std::vector<std::string> validLevels = {"trace", "debug", "info",
+                                          "warn",  "error", "fatal"};
+  if (std::find(validLevels.begin(), validLevels.end(),
+                to_lower(Level_)) == validLevels.end()) {
+    LOG_ERROR << "Invalid logging level: " << loggingLevel_;
+    return false;
+  }
 
   return valiConfig();
 }
@@ -134,15 +144,6 @@ bool Config::valiConfig() {
   // 验证线程数
   if (serverThreads_ <= 0) {
     LOG_ERROR << "Invalid server threads: " << serverThreads_;
-    return false;
-  }
-
-  // 验证日志级别
-  std::vector<std::string> validLevels = {"trace", "debug", "info",
-                                          "warn",  "error", "fatal"};
-  if (std::find(validLevels.begin(), validLevels.end(),
-                to_lower(loggingLevel_)) == validLevels.end()) {
-    LOG_ERROR << "Invalid logging level: " << loggingLevel_;
     return false;
   }
 
@@ -205,6 +206,6 @@ int Config::getRedisPoolSize() const {
   return redisPoolSize_;
 }
 
-std::string Config::getLoggingLevel() const {
+starry::LogLevel Config::getLoggingLevel() const {
   return loggingLevel_;
 }

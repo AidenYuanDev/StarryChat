@@ -3,6 +3,7 @@
 #include <yaml-cpp/node/node.h>
 #include <yaml-cpp/yaml.h>
 #include <string>
+#include "logging.h"
 
 namespace StarryChat {
 
@@ -36,7 +37,7 @@ class Config {
   int getRedisPoolSize() const;
 
   // Logging
-  std::string getLoggingLevel() const;
+  starry::LogLevel getLoggingLevel() const;
 
  private:
   Config() = default;
@@ -67,7 +68,7 @@ class Config {
   int redisPoolSize_;
 
   // Logging
-  std::string loggingLevel_;
+  starry::LogLevel loggingLevel_;
 };
 
 }  // namespace StarryChat
