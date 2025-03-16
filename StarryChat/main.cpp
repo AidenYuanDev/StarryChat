@@ -35,6 +35,9 @@ int main() {
   LOG_INFO << "Config loaded, server will listen on port "
            << config.getServerPort();
 
+  // 初始化日志级别
+  starry::Logger::setLogLevel(config.getLoggingLevel());
+
   // 初始化数据库连接
   auto& dbManager = StarryChat::DBManager::getInstance();
   if (!dbManager.initialize()) {

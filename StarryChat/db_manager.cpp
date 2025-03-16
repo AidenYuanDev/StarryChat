@@ -36,6 +36,8 @@ bool DBManager::initialize() {
     // 获取MariaDB驱动实例
     driver_ = sql::mariadb::get_driver_instance();
 
+    initialized_ = true;
+
     // 测试连接
     auto testConn = getConnection();
     if (!testConn) {
@@ -43,8 +45,8 @@ bool DBManager::initialize() {
       return false;
     }
 
-    initialized_ = true;
     LOG_INFO << "Database connection initialized successfully";
+
     return true;
 
   } catch (sql::SQLException& e) {

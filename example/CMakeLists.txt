@@ -1,5 +1,6 @@
 # 列出所有模块
 set(MODULES
+  ./StarryChatTest/
   # 添加其他模块...
 )
 
