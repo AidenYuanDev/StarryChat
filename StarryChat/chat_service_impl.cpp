@@ -60,6 +60,9 @@ void ChatServiceImpl::CreateChatRoom(
           chatRoom.setMemberCount(rs->getUInt64("member_count"));
           chatRoom.setAvatarUrl(std::string(rs->getString("avatar_url")));
 
+          // 缓存聊天室信息
+          cacheChatRoom(chatRoom);
+
           // 设置响应
           response->set_success(true);
           *response->mutable_chat_room() = chatRoom.toProto();
@@ -104,54 +107,101 @@ void ChatServiceImpl::GetChatRoom(
       return;
     }
 
-    auto conn = getConnection();
+    bool cacheMiss = true;
+    ChatRoom chatRoom;
+    std::vector<ChatRoomMember> members;
 
-    // 获取聊天室信息
-    std::unique_ptr<sql::PreparedStatement> stmt(
-        conn->prepareStatement("SELECT * FROM chat_rooms WHERE id = ?"));
-    stmt->setUInt64(1, request->chat_room_id());
+    // 尝试从缓存获取聊天室信息
+    auto cachedChatRoom = getChatRoomFromCache(request->chat_room_id());
+    if (cachedChatRoom) {
+      // 由于 ChatRoom 禁用了复制赋值，所以手动复制所有属性
+      chatRoom.setId(cachedChatRoom->getId());
+      chatRoom.setName(cachedChatRoom->getName());
+      chatRoom.setDescription(cachedChatRoom->getDescription());
+      chatRoom.setCreatorId(cachedChatRoom->getCreatorId());
+      chatRoom.setCreatedTime(cachedChatRoom->getCreatedTime());
+      chatRoom.setMemberCount(cachedChatRoom->getMemberCount());
+      chatRoom.setAvatarUrl(cachedChatRoom->getAvatarUrl());
 
-    std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
-    if (rs->next()) {
-      ChatRoom chatRoom;
-      chatRoom.setId(rs->getUInt64("id"));
-      chatRoom.setName(std::string(rs->getString("name")));
-      chatRoom.setDescription(std::string(rs->getString("description")));
-      chatRoom.setCreatorId(rs->getUInt64("creator_id"));
-      chatRoom.setCreatedTime(rs->getUInt64("created_time"));
-      chatRoom.setMemberCount(rs->getUInt64("member_count"));
-      chatRoom.setAvatarUrl(std::string(rs->getString("avatar_url")));
-
-      response->set_success(true);
-      *response->mutable_chat_room() = chatRoom.toProto();
-
-      // 获取成员列表
-      std::unique_ptr<sql::PreparedStatement> memberStmt(conn->prepareStatement(
-          "SELECT m.*, u.nickname FROM chat_room_members m "
-          "JOIN users u ON m.user_id = u.id "
-          "WHERE m.chat_room_id = ?"));
-      memberStmt->setUInt64(1, request->chat_room_id());
-
-      std::unique_ptr<sql::ResultSet> memberRs(memberStmt->executeQuery());
-      while (memberRs->next()) {
-        auto* member = response->add_members();
-        member->set_chat_room_id(memberRs->getUInt64("chat_room_id"));
-        member->set_user_id(memberRs->getUInt64("user_id"));
-        member->set_role(
-            static_cast<starrychat::MemberRole>(memberRs->getInt("role")));
-        member->set_join_time(memberRs->getUInt64("join_time"));
-
-        std::string displayName =
-            std::string(memberRs->getString("display_name"));
-        if (displayName.empty()) {
-          displayName = std::string(memberRs->getString("nickname"));
-        }
-        member->set_display_name(displayName);
+      // 尝试从缓存获取成员列表
+      members = getChatRoomMembersFromCache(request->chat_room_id());
+      if (!members.empty()) {
+        cacheMiss = false;
+        LOG_INFO << "Chat room and members cache hit for ID: "
+                 << request->chat_room_id();
+      } else {
+        LOG_INFO << "Chat room cache hit but members cache miss for ID: "
+                 << request->chat_room_id();
       }
     } else {
-      response->set_success(false);
-      response->set_error_message("Chat room not found");
+      LOG_INFO << "Chat room cache miss for ID: " << request->chat_room_id();
     }
+
+    if (cacheMiss) {
+      // 缓存未命中，从数据库获取数据
+      auto conn = getConnection();
+
+      // 获取聊天室信息
+      std::unique_ptr<sql::PreparedStatement> stmt(
+          conn->prepareStatement("SELECT * FROM chat_rooms WHERE id = ?"));
+      stmt->setUInt64(1, request->chat_room_id());
+
+      std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
+      if (rs->next()) {
+        chatRoom.setId(rs->getUInt64("id"));
+        chatRoom.setName(std::string(rs->getString("name")));
+        chatRoom.setDescription(std::string(rs->getString("description")));
+        chatRoom.setCreatorId(rs->getUInt64("creator_id"));
+        chatRoom.setCreatedTime(rs->getUInt64("created_time"));
+        chatRoom.setMemberCount(rs->getUInt64("member_count"));
+        chatRoom.setAvatarUrl(std::string(rs->getString("avatar_url")));
+
+        // 缓存聊天室信息
+        cacheChatRoom(chatRoom);
+
+        // 获取成员列表
+        std::unique_ptr<sql::PreparedStatement> memberStmt(
+            conn->prepareStatement(
+                "SELECT m.*, u.nickname FROM chat_room_members m "
+                "JOIN users u ON m.user_id = u.id "
+                "WHERE m.chat_room_id = ?"));
+        memberStmt->setUInt64(1, request->chat_room_id());
+
+        std::unique_ptr<sql::ResultSet> memberRs(memberStmt->executeQuery());
+        while (memberRs->next()) {
+          // 获取所需数据
+          ChatRoomMember member(
+              memberRs->getUInt64("chat_room_id"),
+              memberRs->getUInt64("user_id"),
+              static_cast<MemberRole>(memberRs->getInt("role")));
+
+          std::string displayName =
+              std::string(memberRs->getString("display_name"));
+          if (displayName.empty()) {
+            displayName = std::string(memberRs->getString("nickname"));
+          }
+          member.setDisplayName(displayName);
+
+          // 缓存成员信息
+          cacheChatRoomMember(member);
+        }
+      } else {
+        response->set_success(false);
+        response->set_error_message("Chat room not found");
+        done(response);
+        return;
+      }
+    }
+
+    // 设置响应
+    response->set_success(true);
+    *response->mutable_chat_room() = chatRoom.toProto();
+
+    // 添加成员信息
+    for (const auto& member : members) {
+      *response->add_members() = member.toProto();
+    }
+
   } catch (sql::SQLException& e) {
     LOG_ERROR << "GetChatRoom SQL error: " << e.what();
     response->set_success(false);
@@ -250,6 +300,9 @@ void ChatServiceImpl::UpdateChatRoom(
         chatRoom.setMemberCount(rs->getUInt64("member_count"));
         chatRoom.setAvatarUrl(std::string(rs->getString("avatar_url")));
 
+        // 更新缓存
+        cacheChatRoom(chatRoom);
+
         // 设置响应
         response->set_success(true);
         *response->mutable_chat_room() = chatRoom.toProto();
@@ -300,14 +353,20 @@ void ChatServiceImpl::DissolveChatRoom(
 
     try {
       // 获取所有成员ID用于通知
-      std::unique_ptr<sql::PreparedStatement> memberStmt(conn->prepareStatement(
-          "SELECT user_id FROM chat_room_members WHERE chat_room_id = ?"));
-      memberStmt->setUInt64(1, request->chat_room_id());
+      std::vector<uint64_t> memberIds =
+          getChatRoomMemberIdsFromCache(request->chat_room_id());
 
-      std::vector<uint64_t> memberIds;
-      std::unique_ptr<sql::ResultSet> memberRs(memberStmt->executeQuery());
-      while (memberRs->next()) {
-        memberIds.push_back(memberRs->getUInt64("user_id"));
+      if (memberIds.empty()) {
+        // 缓存未命中，从数据库获取
+        std::unique_ptr<sql::PreparedStatement> memberStmt(
+            conn->prepareStatement("SELECT user_id FROM chat_room_members "
+                                   "WHERE chat_room_id = ?"));
+        memberStmt->setUInt64(1, request->chat_room_id());
+
+        std::unique_ptr<sql::ResultSet> memberRs(memberStmt->executeQuery());
+        while (memberRs->next()) {
+          memberIds.push_back(memberRs->getUInt64("user_id"));
+        }
       }
 
       // 删除所有成员
@@ -326,9 +385,14 @@ void ChatServiceImpl::DissolveChatRoom(
         conn->commit();
         response->set_success(true);
 
+        // 使缓存失效
+        invalidateChatRoomCache(request->chat_room_id());
+
         // 通知所有成员
         for (uint64_t memberId : memberIds) {
           notifyMembershipChanged(request->chat_room_id(), memberId, false);
+          // 使成员的聊天列表缓存失效
+          invalidateUserChatsListCache(memberId);
         }
       } else {
         conn->rollback();
@@ -389,19 +453,41 @@ void ChatServiceImpl::AddChatRoomMember(
 
         std::unique_ptr<sql::ResultSet> userRs(userStmt->executeQuery());
         if (userRs->next()) {
+          // 创建成员对象
+          ChatRoomMember member(request->chat_room_id(), userId,
+                                starrychat::MEMBER_ROLE_MEMBER);
+
+          // 创建成员对象
+          // 注意:
+          // 之前代码中已经创建了一个member变量，所以这里命名为memberObj避免重复声明
+          ChatRoomMember memberObj(request->chat_room_id(), userId,
+                                   starrychat::MEMBER_ROLE_MEMBER);
+
+          // 转换 SQLString 到 std::string
+          std::string nickname = std::string(userRs->getString("nickname"));
+          memberObj.setDisplayName(nickname);
+
+          // 缓存成员信息
+          cacheChatRoomMember(memberObj);
+
           // 添加到响应
-          auto* member = response->add_members();
-          member->set_chat_room_id(request->chat_room_id());
-          member->set_user_id(userId);
-          member->set_role(starrychat::MEMBER_ROLE_MEMBER);
-          member->set_join_time(
-              std::chrono::duration_cast<std::chrono::seconds>(
-                  std::chrono::system_clock::now().time_since_epoch())
-                  .count());
-          member->set_display_name(userRs->getString("nickname"));
+          *response->add_members() = memberObj.toProto();
+
+          // 缓存成员信息
+          cacheChatRoomMember(member);
+
+          // 添加到缓存的成员列表
+          addChatRoomMemberToCache(request->chat_room_id(), userId,
+                                   starrychat::MEMBER_ROLE_MEMBER);
+
+          // 添加到响应
+          *response->add_members() = member.toProto();
 
           // 通知成员变更
           notifyMembershipChanged(request->chat_room_id(), userId, true);
+
+          // 使用户的聊天列表缓存失效
+          invalidateUserChatsListCache(userId);
         }
       }
     }
@@ -455,8 +541,14 @@ void ChatServiceImpl::RemoveChatRoomMember(
       }
 
       if (removeChatRoomMemberFromDB(request->chat_room_id(), userId)) {
+        // 从缓存中移除成员
+        removeChatRoomMemberFromCache(request->chat_room_id(), userId);
+
         // 通知成员变更
         notifyMembershipChanged(request->chat_room_id(), userId, false);
+
+        // 使用户的聊天列表缓存失效
+        invalidateUserChatsListCache(userId);
       }
     }
 
@@ -521,18 +613,19 @@ void ChatServiceImpl::UpdateMemberRole(
 
       std::unique_ptr<sql::ResultSet> rs(selectStmt->executeQuery());
       if (rs->next()) {
-        auto* member = response->mutable_member();
-        member->set_chat_room_id(rs->getUInt64("chat_room_id"));
-        member->set_user_id(rs->getUInt64("user_id"));
-        member->set_role(
-            static_cast<starrychat::MemberRole>(rs->getInt("role")));
-        member->set_join_time(rs->getUInt64("join_time"));
+        ChatRoomMember member(rs->getUInt64("chat_room_id"),
+                              rs->getUInt64("user_id"),
+                              static_cast<MemberRole>(rs->getInt("role")));
 
-        std::string displayName = std::string(rs->getString("display_name"));
-        if (displayName.empty()) {
-          displayName = std::string(rs->getString("nickname"));
-        }
-        member->set_display_name(displayName);
+        // 这一段代码似乎重复了，删除这段代码
+        // 上面已经创建了member变量并设置了属性
+
+        // 更新成员缓存
+        cacheChatRoomMember(member);
+
+        // 更新响应
+        auto* responseMember = response->mutable_member();
+        *responseMember = member.toProto();
 
         response->set_success(true);
 
@@ -587,11 +680,18 @@ void ChatServiceImpl::LeaveChatRoom(
     // 移除成员
     if (removeChatRoomMemberFromDB(request->chat_room_id(),
                                    request->user_id())) {
+      // 从缓存中移除成员
+      removeChatRoomMemberFromCache(request->chat_room_id(),
+                                    request->user_id());
+
       response->set_success(true);
 
       // 通知成员变更
       notifyMembershipChanged(request->chat_room_id(), request->user_id(),
                               false);
+
+      // 使用户的聊天列表缓存失效
+      invalidateUserChatsListCache(request->user_id());
 
       // 更新成员数量
       updateChatRoomMemberCount(request->chat_room_id());
@@ -646,22 +746,29 @@ void ChatServiceImpl::CreatePrivateChat(
 
       std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
       if (rs->next()) {
-        auto* privateChat = response->mutable_private_chat();
-        privateChat->set_id(rs->getUInt64("id"));
-        privateChat->set_user1_id(rs->getUInt64("user1_id"));
-        privateChat->set_user2_id(rs->getUInt64("user2_id"));
-        privateChat->set_created_time(rs->getUInt64("created_time"));
+        starrychat::PrivateChat privateChat;
+        privateChat.set_id(rs->getUInt64("id"));
+        privateChat.set_user1_id(rs->getUInt64("user1_id"));
+        privateChat.set_user2_id(rs->getUInt64("user2_id"));
+        privateChat.set_created_time(rs->getUInt64("created_time"));
 
         if (!rs->isNull("last_message_time")) {
-          privateChat->set_last_message_time(
-              rs->getUInt64("last_message_time"));
+          privateChat.set_last_message_time(rs->getUInt64("last_message_time"));
         }
 
+        // 缓存私聊信息
+        cachePrivateChat(privateChat);
+
         response->set_success(true);
+        *response->mutable_private_chat() = privateChat;
 
         // 通知私聊创建
-        notifyPrivateChatCreated(privateChatId, privateChat->user1_id(),
-                                 privateChat->user2_id());
+        notifyPrivateChatCreated(privateChatId, privateChat.user1_id(),
+                                 privateChat.user2_id());
+
+        // 使两个用户的聊天列表缓存失效
+        invalidateUserChatsListCache(privateChat.user1_id());
+        invalidateUserChatsListCache(privateChat.user2_id());
       } else {
         response->set_success(false);
         response->set_error_message("Failed to retrieve private chat info");
@@ -691,40 +798,103 @@ void ChatServiceImpl::GetPrivateChat(
   auto response = responsePrototype->New();
 
   try {
-    auto conn = getConnection();
+    // 尝试从缓存获取私聊信息
+    bool cacheMiss = true;
+    starrychat::PrivateChat privateChat;
 
-    // 获取私聊信息
-    std::unique_ptr<sql::PreparedStatement> stmt(
-        conn->prepareStatement("SELECT * FROM private_chats WHERE id = ?"));
-    stmt->setUInt64(1, request->private_chat_id());
+    auto cachedPrivateChat =
+        getPrivateChatFromCache(request->private_chat_id());
+    if (cachedPrivateChat) {
+      privateChat = *cachedPrivateChat;
+      cacheMiss = false;
+      LOG_INFO << "Private chat cache hit for ID: "
+               << request->private_chat_id();
+    } else {
+      LOG_INFO << "Private chat cache miss for ID: "
+               << request->private_chat_id();
+    }
 
-    std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
-    if (rs->next()) {
-      uint64_t user1Id = rs->getUInt64("user1_id");
-      uint64_t user2Id = rs->getUInt64("user2_id");
+    if (cacheMiss) {
+      // 缓存未命中，从数据库获取
+      auto conn = getConnection();
 
-      // 验证用户是否为私聊参与者
-      if (request->user_id() != user1Id && request->user_id() != user2Id) {
+      // 获取私聊信息
+      std::unique_ptr<sql::PreparedStatement> stmt(
+          conn->prepareStatement("SELECT * FROM private_chats WHERE id = ?"));
+      stmt->setUInt64(1, request->private_chat_id());
+
+      std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
+      if (!rs->next()) {
         response->set_success(false);
-        response->set_error_message("Not a participant of this private chat");
+        response->set_error_message("Private chat not found");
         done(response);
         return;
       }
 
-      // 设置私聊信息
-      auto* privateChat = response->mutable_private_chat();
-      privateChat->set_id(rs->getUInt64("id"));
-      privateChat->set_user1_id(user1Id);
-      privateChat->set_user2_id(user2Id);
-      privateChat->set_created_time(rs->getUInt64("created_time"));
+      privateChat.set_id(rs->getUInt64("id"));
+      privateChat.set_user1_id(rs->getUInt64("user1_id"));
+      privateChat.set_user2_id(rs->getUInt64("user2_id"));
+      privateChat.set_created_time(rs->getUInt64("created_time"));
 
       if (!rs->isNull("last_message_time")) {
-        privateChat->set_last_message_time(rs->getUInt64("last_message_time"));
+        privateChat.set_last_message_time(rs->getUInt64("last_message_time"));
       }
 
-      // 获取伙伴信息
-      uint64_t partnerId = (request->user_id() == user1Id) ? user2Id : user1Id;
+      // 缓存私聊信息
+      cachePrivateChat(privateChat);
+    }
 
+    uint64_t user1Id = privateChat.user1_id();
+    uint64_t user2Id = privateChat.user2_id();
+
+    // 验证用户是否为私聊参与者
+    if (request->user_id() != user1Id && request->user_id() != user2Id) {
+      response->set_success(false);
+      response->set_error_message("Not a participant of this private chat");
+      done(response);
+      return;
+    }
+
+    // 获取伙伴信息
+    uint64_t partnerId = (request->user_id() == user1Id) ? user2Id : user1Id;
+
+    // 尝试从Redis缓存获取用户信息
+    auto& redis = RedisManager::getInstance();
+    std::string userKey = "user:" + std::to_string(partnerId);
+    auto userData = redis.hgetall(userKey);
+
+    if (userData && !userData->empty()) {
+      // 从缓存构建用户信息
+      auto* partnerInfo = response->mutable_partner_info();
+      partnerInfo->set_id(partnerId);
+
+      if (userData->find("username") != userData->end())
+        partnerInfo->set_username((*userData)["username"]);
+
+      if (userData->find("nickname") != userData->end())
+        partnerInfo->set_nickname((*userData)["nickname"]);
+
+      if (userData->find("email") != userData->end())
+        partnerInfo->set_email((*userData)["email"]);
+
+      if (userData->find("avatar_url") != userData->end())
+        partnerInfo->set_avatar_url((*userData)["avatar_url"]);
+
+      if (userData->find("status") != userData->end())
+        partnerInfo->set_status(static_cast<starrychat::UserStatus>(
+            std::stoi((*userData)["status"])));
+
+      if (userData->find("created_time") != userData->end())
+        partnerInfo->set_created_time(std::stoull((*userData)["created_time"]));
+
+      if (userData->find("last_login_time") != userData->end())
+        partnerInfo->set_last_login_time(
+            std::stoull((*userData)["last_login_time"]));
+
+      LOG_INFO << "Partner info cache hit for ID: " << partnerId;
+    } else {
+      // 缓存未命中，从数据库获取用户信息
+      auto conn = getConnection();
       std::unique_ptr<sql::PreparedStatement> userStmt(
           conn->prepareStatement("SELECT * FROM users WHERE id = ?"));
       userStmt->setUInt64(1, partnerId);
@@ -749,12 +919,11 @@ void ChatServiceImpl::GetPrivateChat(
               userRs->getUInt64("last_login_time"));
         }
       }
-
-      response->set_success(true);
-    } else {
-      response->set_success(false);
-      response->set_error_message("Private chat not found");
     }
+
+    // 设置响应
+    response->set_success(true);
+    *response->mutable_private_chat() = privateChat;
   } catch (sql::SQLException& e) {
     LOG_ERROR << "GetPrivateChat SQL error: " << e.what();
     response->set_success(false);
@@ -776,7 +945,34 @@ void ChatServiceImpl::GetUserChats(
   auto response = responsePrototype->New();
 
   try {
+    // 尝试从缓存获取聊天列表
+    auto cachedChats = getUserChatsListFromCache(request->user_id());
+    if (cachedChats) {
+      LOG_INFO << "User chats list cache hit for user ID: "
+               << request->user_id();
+
+      response->set_success(true);
+      for (const auto& chat : *cachedChats) {
+        *response->add_chats() = chat;
+      }
+
+      done(response);
+      return;
+    }
+
+    LOG_INFO << "User chats list cache miss for user ID: "
+             << request->user_id();
+
+    // 缓存未命中，从数据库获取
     auto conn = getConnection();
+    if (!conn) {
+      response->set_success(false);
+      response->set_error_message("Database connection failed");
+      done(response);
+      return;
+    }
+
+    std::vector<starrychat::ChatSummary> chats;
 
     // 获取私聊列表
     std::unique_ptr<sql::PreparedStatement> privateStmt(conn->prepareStatement(
@@ -789,8 +985,11 @@ void ChatServiceImpl::GetUserChats(
 
     while (privateRs->next()) {
       uint64_t privateChatId = privateRs->getUInt64("id");
-      *response->add_chats() = getChatSummary(
+      starrychat::ChatSummary chatSummary = getChatSummary(
           starrychat::CHAT_TYPE_PRIVATE, privateChatId, request->user_id());
+
+      *response->add_chats() = chatSummary;
+      chats.push_back(chatSummary);
     }
 
     // 获取群聊列表
@@ -805,9 +1004,15 @@ void ChatServiceImpl::GetUserChats(
 
     while (groupRs->next()) {
       uint64_t chatRoomId = groupRs->getUInt64("id");
-      *response->add_chats() = getChatSummary(starrychat::CHAT_TYPE_GROUP,
-                                              chatRoomId, request->user_id());
+      starrychat::ChatSummary chatSummary = getChatSummary(
+          starrychat::CHAT_TYPE_GROUP, chatRoomId, request->user_id());
+
+      *response->add_chats() = chatSummary;
+      chats.push_back(chatSummary);
     }
+
+    // 缓存聊天列表
+    cacheUserChatsList(request->user_id(), chats);
 
     response->set_success(true);
   } catch (sql::SQLException& e) {
@@ -826,6 +1031,19 @@ void ChatServiceImpl::GetUserChats(
 // 验证用户是否为聊天室所有者
 bool ChatServiceImpl::isChatRoomOwner(uint64_t userId, uint64_t chatRoomId) {
   try {
+    auto& redis = RedisManager::getInstance();
+
+    // 从Redis缓存检查
+    std::string key = "chat_room:" + std::to_string(chatRoomId) +
+                      ":member:" + std::to_string(userId);
+    auto roleStr = redis.hget(key, "role");
+
+    if (roleStr) {
+      int role = std::stoi(*roleStr);
+      return role == static_cast<int>(starrychat::MEMBER_ROLE_OWNER);
+    }
+
+    // 缓存未命中，从数据库查询
     auto conn = getConnection();
 
     std::unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
@@ -836,7 +1054,17 @@ bool ChatServiceImpl::isChatRoomOwner(uint64_t userId, uint64_t chatRoomId) {
     stmt->setInt(3, static_cast<int>(starrychat::MEMBER_ROLE_OWNER));
 
     std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
-    return rs->next();
+    bool result = rs->next();
+
+    // 如果是所有者，缓存结果
+    if (result) {
+      redis.hset(
+          key, "role",
+          std::to_string(static_cast<int>(starrychat::MEMBER_ROLE_OWNER)));
+      redis.expire(key, std::chrono::hours(24));
+    }
+
+    return result;
   } catch (std::exception& e) {
     LOG_ERROR << "isChatRoomOwner error: " << e.what();
     return false;
@@ -846,6 +1074,20 @@ bool ChatServiceImpl::isChatRoomOwner(uint64_t userId, uint64_t chatRoomId) {
 // 验证用户是否为聊天室管理员
 bool ChatServiceImpl::isChatRoomAdmin(uint64_t userId, uint64_t chatRoomId) {
   try {
+    auto& redis = RedisManager::getInstance();
+
+    // 从Redis缓存检查
+    std::string key = "chat_room:" + std::to_string(chatRoomId) +
+                      ":member:" + std::to_string(userId);
+    auto roleStr = redis.hget(key, "role");
+
+    if (roleStr) {
+      int role = std::stoi(*roleStr);
+      return role == static_cast<int>(starrychat::MEMBER_ROLE_OWNER) ||
+             role == static_cast<int>(starrychat::MEMBER_ROLE_ADMIN);
+    }
+
+    // 缓存未命中，从数据库查询
     auto conn = getConnection();
 
     std::unique_ptr<sql::PreparedStatement> stmt(
@@ -858,6 +1100,11 @@ bool ChatServiceImpl::isChatRoomAdmin(uint64_t userId, uint64_t chatRoomId) {
     if (rs->next()) {
       starrychat::MemberRole role =
           static_cast<starrychat::MemberRole>(rs->getInt("role"));
+
+      // 缓存结果
+      redis.hset(key, "role", std::to_string(static_cast<int>(role)));
+      redis.expire(key, std::chrono::hours(24));
+
       return role == starrychat::MEMBER_ROLE_OWNER ||
              role == starrychat::MEMBER_ROLE_ADMIN;
     }
@@ -871,6 +1118,26 @@ bool ChatServiceImpl::isChatRoomAdmin(uint64_t userId, uint64_t chatRoomId) {
 // 验证用户是否为聊天室成员
 bool ChatServiceImpl::isChatRoomMember(uint64_t userId, uint64_t chatRoomId) {
   try {
+    auto& redis = RedisManager::getInstance();
+
+    // 从Redis缓存检查
+    std::string memberKey =
+        "chat_room:" + std::to_string(chatRoomId) + ":members";
+    auto members = redis.smembers(memberKey);
+    if (members && !members->empty()) {
+      std::string userIdStr = std::to_string(userId);
+      return std::find(members->begin(), members->end(), userIdStr) !=
+             members->end();
+    }
+
+    // 单独检查成员记录
+    std::string key = "chat_room:" + std::to_string(chatRoomId) +
+                      ":member:" + std::to_string(userId);
+    if (redis.exists(key)) {
+      return true;
+    }
+
+    // 缓存未命中，从数据库查询
     auto conn = getConnection();
 
     std::unique_ptr<sql::PreparedStatement> stmt(
@@ -880,9 +1147,53 @@ bool ChatServiceImpl::isChatRoomMember(uint64_t userId, uint64_t chatRoomId) {
     stmt->setUInt64(2, userId);
 
     std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
-    return rs->next();
+    bool result = rs->next();
+
+    // 如果是成员，缓存结果
+    if (result) {
+      redis.sadd(memberKey, std::to_string(userId));
+      redis.expire(memberKey, std::chrono::hours(24));
+    }
+
+    return result;
   } catch (std::exception& e) {
     LOG_ERROR << "isChatRoomMember error: " << e.what();
+    return false;
+  }
+}
+
+// 验证用户是否为私聊成员
+bool ChatServiceImpl::isPrivateChatMember(uint64_t userId,
+                                          uint64_t privateChatId) {
+  try {
+    auto& redis = RedisManager::getInstance();
+
+    // 从Redis缓存检查
+    std::string key = "private_chat:" + std::to_string(privateChatId);
+    auto cachedChat = redis.get(key);
+
+    if (cachedChat) {
+      starrychat::PrivateChat privateChat;
+      if (privateChat.ParseFromString(*cachedChat)) {
+        return privateChat.user1_id() == userId ||
+               privateChat.user2_id() == userId;
+      }
+    }
+
+    // 缓存未命中，从数据库查询
+    auto conn = getConnection();
+
+    std::unique_ptr<sql::PreparedStatement> stmt(
+        conn->prepareStatement("SELECT 1 FROM private_chats WHERE id = ? AND "
+                               "(user1_id = ? OR user2_id = ?)"));
+    stmt->setUInt64(1, privateChatId);
+    stmt->setUInt64(2, userId);
+    stmt->setUInt64(3, userId);
+
+    std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
+    return rs->next();
+  } catch (std::exception& e) {
+    LOG_ERROR << "isPrivateChatMember error: " << e.what();
     return false;
   }
 }
@@ -1002,13 +1313,36 @@ bool ChatServiceImpl::updateChatRoomMemberCount(uint64_t chatRoomId) {
     if (countRs->next()) {
       uint64_t memberCount = countRs->getUInt64("count");
 
-      // 更新成员数量
+      // 更新数据库中的成员数量
       std::unique_ptr<sql::PreparedStatement> updateStmt(conn->prepareStatement(
           "UPDATE chat_rooms SET member_count = ? WHERE id = ?"));
       updateStmt->setUInt64(1, memberCount);
       updateStmt->setUInt64(2, chatRoomId);
 
-      return updateStmt->executeUpdate() > 0;
+      bool result = updateStmt->executeUpdate() > 0;
+
+      // 如果更新成功，同时更新缓存
+      if (result) {
+        auto cachedChatRoom = getChatRoomFromCache(chatRoomId);
+        if (cachedChatRoom) {
+          // 创建一个新的 ChatRoom 对象，因为不能直接修改 cachedChatRoom
+          ChatRoom updatedChatRoom;
+          updatedChatRoom.setId(cachedChatRoom->getId());
+          updatedChatRoom.setName(cachedChatRoom->getName());
+          updatedChatRoom.setDescription(cachedChatRoom->getDescription());
+          updatedChatRoom.setCreatorId(cachedChatRoom->getCreatorId());
+          updatedChatRoom.setCreatedTime(cachedChatRoom->getCreatedTime());
+          updatedChatRoom.setAvatarUrl(cachedChatRoom->getAvatarUrl());
+
+          // 设置新的成员数量
+          updatedChatRoom.setMemberCount(memberCount);
+
+          // 更新缓存
+          cacheChatRoom(updatedChatRoom);
+        }
+      }
+
+      return result;
     }
 
     return false;
@@ -1025,11 +1359,25 @@ bool ChatServiceImpl::updateChatRoomMemberCount(uint64_t chatRoomId) {
 uint64_t ChatServiceImpl::findOrCreatePrivateChat(uint64_t user1Id,
                                                   uint64_t user2Id) {
   try {
-    auto conn = getConnection();
+    auto& redis = RedisManager::getInstance();
 
     // 确保 user1Id < user2Id 以保持一致性
     if (user1Id > user2Id) {
       std::swap(user1Id, user2Id);
+    }
+
+    // 尝试从缓存获取
+    std::string cacheKey = "private_chat:users:" + std::to_string(user1Id) +
+                           ":" + std::to_string(user2Id);
+    auto cachedId = redis.get(cacheKey);
+
+    if (cachedId) {
+      return std::stoull(*cachedId);
+    }
+
+    auto conn = getConnection();
+    if (!conn) {
+      return 0;
     }
 
     // 查找现有私聊
@@ -1040,7 +1388,13 @@ uint64_t ChatServiceImpl::findOrCreatePrivateChat(uint64_t user1Id,
 
     std::unique_ptr<sql::ResultSet> findRs(findStmt->executeQuery());
     if (findRs->next()) {
-      return findRs->getUInt64("id");
+      uint64_t privateChatId = findRs->getUInt64("id");
+
+      // 缓存映射
+      redis.set(cacheKey, std::to_string(privateChatId),
+                std::chrono::hours(24));
+
+      return privateChatId;
     }
 
     // 创建新私聊
@@ -1061,7 +1415,13 @@ uint64_t ChatServiceImpl::findOrCreatePrivateChat(uint64_t user1Id,
     if (createStmt->executeUpdate() > 0) {
       std::unique_ptr<sql::ResultSet> rs(createStmt->getGeneratedKeys());
       if (rs->next()) {
-        return rs->getUInt64(1);
+        uint64_t privateChatId = rs->getUInt64(1);
+
+        // 缓存映射
+        redis.set(cacheKey, std::to_string(privateChatId),
+                  std::chrono::hours(24));
+
+        return privateChatId;
       }
     }
 
@@ -1083,57 +1443,118 @@ starrychat::ChatSummary ChatServiceImpl::getChatSummary(
   starrychat::ChatSummary summary;
 
   try {
+    auto& redis = RedisManager::getInstance();
     auto conn = getConnection();
 
     summary.set_id(chatId);
     summary.set_type(type);
 
     if (type == starrychat::CHAT_TYPE_PRIVATE) {
-      // 私聊摘要
-      std::unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
-          "SELECT pc.*, u1.nickname as nick1, u1.avatar_url as avatar1, "
-          "u2.nickname as nick2, u2.avatar_url as avatar2 "
-          "FROM private_chats pc "
-          "JOIN users u1 ON pc.user1_id = u1.id "
-          "JOIN users u2 ON pc.user2_id = u2.id "
-          "WHERE pc.id = ?"));
-      stmt->setUInt64(1, chatId);
+      // 尝试从缓存获取私聊信息
+      auto cachedPrivateChat = getPrivateChatFromCache(chatId);
 
-      std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
-      if (rs->next()) {
-        uint64_t user1Id = rs->getUInt64("user1_id");
-        // uint64_t user2Id = rs->getUInt64("user2_id");
+      if (cachedPrivateChat) {
+        uint64_t user1Id = cachedPrivateChat->user1_id();
+        uint64_t user2Id = cachedPrivateChat->user2_id();
+        uint64_t partnerId = (userId == user1Id) ? user2Id : user1Id;
 
-        // 使用对方的信息
-        if (userId == user1Id) {
-          summary.set_name(std::string(rs->getString("nick2")));
-          summary.set_avatar_url(std::string(rs->getString("avatar2")));
+        // 尝试从缓存获取伙伴信息
+        std::string userKey = "user:" + std::to_string(partnerId);
+        auto userData = redis.hgetall(userKey);
+
+        if (userData && !userData->empty()) {
+          if (userData->find("nickname") != userData->end())
+            summary.set_name((*userData)["nickname"]);
+
+          if (userData->find("avatar_url") != userData->end())
+            summary.set_avatar_url((*userData)["avatar_url"]);
         } else {
-          summary.set_name(std::string(rs->getString("nick1")));
-          summary.set_avatar_url(std::string(rs->getString("avatar1")));
+          // 从数据库获取伙伴信息
+          std::unique_ptr<sql::PreparedStatement> userStmt(
+              conn->prepareStatement(
+                  "SELECT nickname, avatar_url FROM users WHERE id = ?"));
+          userStmt->setUInt64(1, partnerId);
+
+          std::unique_ptr<sql::ResultSet> userRs(userStmt->executeQuery());
+          if (userRs->next()) {
+            summary.set_name(std::string(userRs->getString("nickname")));
+            summary.set_avatar_url(
+                std::string(userRs->getString("avatar_url")));
+          }
         }
 
-        if (!rs->isNull("last_message_time")) {
-          summary.set_last_message_time(rs->getUInt64("last_message_time"));
+        // 检查是否有最后消息时间（通过检查是否大于0来代替has_last_message_time）
+        if (cachedPrivateChat->last_message_time() > 0) {
+          summary.set_last_message_time(cachedPrivateChat->last_message_time());
         } else {
-          summary.set_last_message_time(rs->getUInt64("created_time"));
+          summary.set_last_message_time(cachedPrivateChat->created_time());
+        }
+      } else {
+        // 从数据库获取私聊信息
+        std::unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
+            "SELECT pc.*, u1.nickname as nick1, u1.avatar_url as avatar1, "
+            "u2.nickname as nick2, u2.avatar_url as avatar2 "
+            "FROM private_chats pc "
+            "JOIN users u1 ON pc.user1_id = u1.id "
+            "JOIN users u2 ON pc.user2_id = u2.id "
+            "WHERE pc.id = ?"));
+        stmt->setUInt64(1, chatId);
+
+        std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
+        if (rs->next()) {
+          uint64_t user1Id = rs->getUInt64("user1_id");
+
+          // 使用对方的信息
+          if (userId == user1Id) {
+            summary.set_name(std::string(rs->getString("nick2")));
+            summary.set_avatar_url(std::string(rs->getString("avatar2")));
+          } else {
+            summary.set_name(std::string(rs->getString("nick1")));
+            summary.set_avatar_url(std::string(rs->getString("avatar1")));
+          }
+
+          if (!rs->isNull("last_message_time")) {
+            summary.set_last_message_time(rs->getUInt64("last_message_time"));
+          } else {
+            summary.set_last_message_time(rs->getUInt64("created_time"));
+          }
         }
       }
     } else if (type == starrychat::CHAT_TYPE_GROUP) {
-      // 群聊摘要
-      std::unique_ptr<sql::PreparedStatement> stmt(
-          conn->prepareStatement("SELECT * FROM chat_rooms WHERE id = ?"));
-      stmt->setUInt64(1, chatId);
+      // 尝试从缓存获取聊天室信息
+      auto cachedChatRoom = getChatRoomFromCache(chatId);
 
-      std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
-      if (rs->next()) {
-        summary.set_name(std::string(rs->getString("name")));
-        summary.set_avatar_url(std::string(rs->getString("avatar_url")));
+      if (cachedChatRoom) {
+        summary.set_name(cachedChatRoom->getName());
+        summary.set_avatar_url(cachedChatRoom->getAvatarUrl());
 
-        if (!rs->isNull("last_message_time")) {
-          summary.set_last_message_time(rs->getUInt64("last_message_time"));
+        // 检查是否有最后消息时间
+        std::string lastActiveKey =
+            "chat:last_active:" + std::to_string(static_cast<int>(type)) + ":" +
+            std::to_string(chatId);
+        auto lastActiveTime = redis.get(lastActiveKey);
+
+        if (lastActiveTime) {
+          summary.set_last_message_time(std::stoull(*lastActiveTime));
         } else {
-          summary.set_last_message_time(rs->getUInt64("created_time"));
+          summary.set_last_message_time(cachedChatRoom->getCreatedTime());
+        }
+      } else {
+        // 从数据库获取群聊信息
+        std::unique_ptr<sql::PreparedStatement> stmt(
+            conn->prepareStatement("SELECT * FROM chat_rooms WHERE id = ?"));
+        stmt->setUInt64(1, chatId);
+
+        std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
+        if (rs->next()) {
+          summary.set_name(std::string(rs->getString("name")));
+          summary.set_avatar_url(std::string(rs->getString("avatar_url")));
+
+          if (!rs->isNull("last_message_time")) {
+            summary.set_last_message_time(rs->getUInt64("last_message_time"));
+          } else {
+            summary.set_last_message_time(rs->getUInt64("created_time"));
+          }
         }
       }
     }
@@ -1157,7 +1578,23 @@ starrychat::ChatSummary ChatServiceImpl::getChatSummary(
 std::string ChatServiceImpl::getLastMessagePreview(starrychat::ChatType type,
                                                    uint64_t chatId) {
   try {
+    auto& redis = RedisManager::getInstance();
+
+    // 尝试从缓存获取最后一条消息
+    std::string lastMessageKey =
+        "chat:last_message:" + std::to_string(static_cast<int>(type)) + ":" +
+        std::to_string(chatId);
+
+    auto preview = redis.get(lastMessageKey);
+    if (preview) {
+      return *preview;
+    }
+
+    // 缓存未命中，从数据库查询
     auto conn = getConnection();
+    if (!conn) {
+      return "";
+    }
 
     std::unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
         "SELECT type, content, system_code FROM messages "
@@ -1171,38 +1608,45 @@ std::string ChatServiceImpl::getLastMessagePreview(starrychat::ChatType type,
       starrychat::MessageType msgType =
           static_cast<starrychat::MessageType>(rs->getInt("type"));
 
-      if (msgType == starrychat::MESSAGE_TYPE_TEXT) {
-        std::string content = std::string(rs->getString("content"));
-        // 限制预览长度
-        if (content.length() > 30) {
-          content = content.substr(0, 27) + "...";
-        }
-        return content;
-      } else if (msgType == starrychat::MESSAGE_TYPE_SYSTEM) {
-        return "[System: " + std::string(rs->getString("system_code")) + "]";
-      } else if (msgType == starrychat::MESSAGE_TYPE_IMAGE) {
-        return "[Image]";
-      } else if (msgType == starrychat::MESSAGE_TYPE_FILE) {
-        return "[File]";
-      } else if (msgType == starrychat::MESSAGE_TYPE_AUDIO) {
-        return "[Audio]";
-      } else if (msgType == starrychat::MESSAGE_TYPE_VIDEO) {
-        return "[Video]";
-      } else if (msgType == starrychat::MESSAGE_TYPE_LOCATION) {
-        return "[Location]";
-      } else if (msgType == starrychat::MESSAGE_TYPE_RECALL) {
-        return "[Message was recalled]";
-      }
-    }
+      std::string previewText;
 
-    return "";
+      if (msgType == starrychat::MESSAGE_TYPE_TEXT) {
+        previewText = std::string(rs->getString("content"));
+        // 限制预览长度
+        if (previewText.length() > 30) {
+          previewText = previewText.substr(0, 27) + "...";
+        }
+      } else if (msgType == starrychat::MESSAGE_TYPE_SYSTEM) {
+        previewText =
+            "[System: " + std::string(rs->getString("system_code")) + "]";
+      } else if (msgType == starrychat::MESSAGE_TYPE_IMAGE) {
+        previewText = "[Image]";
+      } else if (msgType == starrychat::MESSAGE_TYPE_FILE) {
+        previewText = "[File]";
+      } else if (msgType == starrychat::MESSAGE_TYPE_AUDIO) {
+        previewText = "[Audio]";
+      } else if (msgType == starrychat::MESSAGE_TYPE_VIDEO) {
+        previewText = "[Video]";
+      } else if (msgType == starrychat::MESSAGE_TYPE_LOCATION) {
+        previewText = "[Location]";
+      } else if (msgType == starrychat::MESSAGE_TYPE_RECALL) {
+        previewText = "[Message was recalled]";
+      }
+
+      // 缓存结果
+      if (!previewText.empty()) {
+        redis.set(lastMessageKey, previewText, std::chrono::hours(24));
+      }
+
+      return previewText;
+    }
   } catch (sql::SQLException& e) {
     LOG_ERROR << "getLastMessagePreview SQL error: " << e.what();
-    return "";
   } catch (std::exception& e) {
     LOG_ERROR << "getLastMessagePreview error: " << e.what();
-    return "";
   }
+
+  return "";
 }
 
 // 获取未读消息数
@@ -1212,6 +1656,7 @@ uint64_t ChatServiceImpl::getUnreadCount(uint64_t userId,
   try {
     auto& redis = RedisManager::getInstance();
 
+    // 未读计数键
     std::string unreadKey = "unread:" + std::to_string(userId) + ":" +
                             std::to_string(static_cast<int>(type)) + ":" +
                             std::to_string(chatId);
@@ -1236,6 +1681,12 @@ void ChatServiceImpl::notifyChatRoomChanged(uint64_t chatRoomId) {
     // 发布聊天室变更通知
     std::string channel = "chat_room:changed:" + std::to_string(chatRoomId);
     redis.publish(channel, std::to_string(chatRoomId));
+
+    // 使聊天室缓存失效，以便下次获取最新数据
+    invalidateChatRoomCache(chatRoomId);
+
+    LOG_INFO << "Published chat room change notification for room ID: "
+             << chatRoomId;
   } catch (std::exception& e) {
     LOG_ERROR << "notifyChatRoomChanged error: " << e.what();
   }
@@ -1258,6 +1709,10 @@ void ChatServiceImpl::notifyMembershipChanged(uint64_t chatRoomId,
     std::string userMessage =
         std::to_string(chatRoomId) + ":" + (added ? "1" : "0");
     redis.publish(userChannel, userMessage);
+
+    LOG_INFO << "Published membership change notification: User " << userId
+             << (added ? " added to " : " removed from ") << "chat room "
+             << chatRoomId;
   } catch (std::exception& e) {
     LOG_ERROR << "notifyMembershipChanged error: " << e.what();
   }
@@ -1274,7 +1729,14 @@ void ChatServiceImpl::notifyPrivateChatCreated(uint64_t privateChatId,
     for (uint64_t userId : {user1Id, user2Id}) {
       std::string channel = "user:private_chat:" + std::to_string(userId);
       redis.publish(channel, std::to_string(privateChatId));
+
+      // 使用户的聊天列表缓存失效
+      invalidateUserChatsListCache(userId);
     }
+
+    LOG_INFO << "Published private chat creation notification: Chat "
+             << privateChatId << " between users " << user1Id << " and "
+             << user2Id;
   } catch (std::exception& e) {
     LOG_ERROR << "notifyPrivateChatCreated error: " << e.what();
   }
@@ -1291,6 +1753,474 @@ bool ChatServiceImpl::validateSession(const std::string& token,
   }
 
   return std::stoull(*sessionUserId) == userId;
+}
+
+// ========== Redis 缓存相关方法实现 ==========
+
+// 缓存聊天室
+void ChatServiceImpl::cacheChatRoom(const ChatRoom& chatRoom) {
+  try {
+    auto& redis = RedisManager::getInstance();
+    std::string key = "chat_room:" + std::to_string(chatRoom.getId());
+
+    // 序列化聊天室信息
+    std::string data = serializeChatRoom(chatRoom);
+
+    // 存储聊天室信息
+    redis.set(key, data, std::chrono::hours(24));
+
+    LOG_INFO << "Cached chat room: " << chatRoom.getId();
+  } catch (std::exception& e) {
+    LOG_ERROR << "cacheChatRoom error: " << e.what();
+  }
+}
+
+// 获取缓存的聊天室
+std::optional<ChatRoom> ChatServiceImpl::getChatRoomFromCache(
+    uint64_t chatRoomId) {
+  try {
+    auto& redis = RedisManager::getInstance();
+    std::string key = "chat_room:" + std::to_string(chatRoomId);
+
+    auto data = redis.get(key);
+    if (!data) {
+      return std::nullopt;
+    }
+
+    // 反序列化聊天室信息
+    ChatRoom chatRoom = deserializeChatRoom(*data);
+
+    // 刷新缓存过期时间
+    redis.expire(key, std::chrono::hours(24));
+
+    return chatRoom;
+  } catch (std::exception& e) {
+    LOG_ERROR << "getChatRoomFromCache error: " << e.what();
+    return std::nullopt;
+  }
+}
+
+// 使聊天室缓存失效
+void ChatServiceImpl::invalidateChatRoomCache(uint64_t chatRoomId) {
+  try {
+    auto& redis = RedisManager::getInstance();
+
+    // 删除聊天室缓存
+    redis.del("chat_room:" + std::to_string(chatRoomId));
+
+    // 删除成员列表缓存
+    redis.del("chat_room:" + std::to_string(chatRoomId) + ":members");
+
+    LOG_INFO << "Invalidated cache for chat room: " << chatRoomId;
+  } catch (std::exception& e) {
+    LOG_ERROR << "invalidateChatRoomCache error: " << e.what();
+  }
+}
+
+// 缓存聊天室成员
+void ChatServiceImpl::cacheChatRoomMember(const ChatRoomMember& member) {
+  try {
+    auto& redis = RedisManager::getInstance();
+
+    uint64_t chatRoomId = member.getChatRoomId();
+    uint64_t userId = member.getUserId();
+
+    // 缓存成员详细信息
+    std::string memberKey = "chat_room:" + std::to_string(chatRoomId) +
+                            ":member:" + std::to_string(userId);
+    std::string data = serializeChatRoomMember(member);
+    redis.set(memberKey, data, std::chrono::hours(24));
+
+    // 添加到成员列表
+    std::string membersKey =
+        "chat_room:" + std::to_string(chatRoomId) + ":members";
+    redis.sadd(membersKey, std::to_string(userId));
+    redis.expire(membersKey, std::chrono::hours(24));
+
+    // 缓存成员角色
+    redis.hset(memberKey, "role",
+               std::to_string(static_cast<int>(member.getRole())));
+
+    LOG_INFO << "Cached chat room member: Room " << chatRoomId << ", User "
+             << userId;
+  } catch (std::exception& e) {
+    LOG_ERROR << "cacheChatRoomMember error: " << e.what();
+  }
+}
+
+// 获取聊天室成员
+std::vector<ChatRoomMember> ChatServiceImpl::getChatRoomMembersFromCache(
+    uint64_t chatRoomId) {
+  std::vector<ChatRoomMember> members;
+
+  try {
+    auto& redis = RedisManager::getInstance();
+
+    // 获取成员ID列表
+    std::string membersKey =
+        "chat_room:" + std::to_string(chatRoomId) + ":members";
+    auto memberIds = redis.smembers(membersKey);
+
+    if (!memberIds || memberIds->empty()) {
+      return members;
+    }
+
+    // 获取每个成员的详细信息
+    for (const auto& idStr : *memberIds) {
+      // 获取成员数据
+      std::string memberKey =
+          "chat_room:" + std::to_string(chatRoomId) + ":member:" + idStr;
+
+      auto data = redis.get(memberKey);
+      if (data) {
+        starrychat::ChatRoomMember proto;
+        if (proto.ParseFromString(*data)) {
+          // 创建新的成员，避免复制
+          members.push_back(ChatRoomMember::fromProto(proto));
+        }
+      }
+    }
+
+    // 刷新缓存过期时间
+    redis.expire(membersKey, std::chrono::hours(24));
+
+    LOG_INFO << "Retrieved " << members.size()
+             << " members from cache for chat room " << chatRoomId;
+  } catch (std::exception& e) {
+    LOG_ERROR << "getChatRoomMembersFromCache error: " << e.what();
+  }
+
+  return members;
+}
+
+// 添加聊天室成员到缓存
+void ChatServiceImpl::addChatRoomMemberToCache(uint64_t chatRoomId,
+                                               uint64_t userId,
+                                               starrychat::MemberRole role) {
+  try {
+    auto& redis = RedisManager::getInstance();
+
+    // 添加到成员列表
+    std::string membersKey =
+        "chat_room:" + std::to_string(chatRoomId) + ":members";
+    redis.sadd(membersKey, std::to_string(userId));
+    redis.expire(membersKey, std::chrono::hours(24));
+
+    // 缓存成员角色
+    std::string memberKey = "chat_room:" + std::to_string(chatRoomId) +
+                            ":member:" + std::to_string(userId);
+    redis.hset(memberKey, "role", std::to_string(static_cast<int>(role)));
+    redis.expire(memberKey, std::chrono::hours(24));
+
+    LOG_INFO << "Added member to cache: Room " << chatRoomId << ", User "
+             << userId;
+  } catch (std::exception& e) {
+    LOG_ERROR << "addChatRoomMemberToCache error: " << e.what();
+  }
+}
+
+// 从缓存中移除聊天室成员
+void ChatServiceImpl::removeChatRoomMemberFromCache(uint64_t chatRoomId,
+                                                    uint64_t userId) {
+  try {
+    auto& redis = RedisManager::getInstance();
+
+    // 从成员列表中移除
+    std::string membersKey =
+        "chat_room:" + std::to_string(chatRoomId) + ":members";
+    redis.srem(membersKey, std::to_string(userId));
+
+    // 删除成员详细信息
+    std::string memberKey = "chat_room:" + std::to_string(chatRoomId) +
+                            ":member:" + std::to_string(userId);
+    redis.del(memberKey);
+
+    LOG_INFO << "Removed member from cache: Room " << chatRoomId << ", User "
+             << userId;
+  } catch (std::exception& e) {
+    LOG_ERROR << "removeChatRoomMemberFromCache error: " << e.what();
+  }
+}
+
+// 更新缓存中的聊天室成员
+void ChatServiceImpl::updateChatRoomMembersInCache(uint64_t chatRoomId) {
+  try {
+    auto conn = getConnection();
+    auto& redis = RedisManager::getInstance();
+
+    // 获取所有成员
+    std::unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
+        "SELECT m.*, u.nickname FROM chat_room_members m "
+        "JOIN users u ON m.user_id = u.id "
+        "WHERE m.chat_room_id = ?"));
+    stmt->setUInt64(1, chatRoomId);
+
+    // 清除现有成员缓存
+    std::string membersKey =
+        "chat_room:" + std::to_string(chatRoomId) + ":members";
+    redis.del(membersKey);
+
+    // 获取并缓存成员
+    std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
+    while (rs->next()) {
+      uint64_t userId = rs->getUInt64("user_id");
+      MemberRole role = static_cast<MemberRole>(rs->getInt("role"));
+
+      ChatRoomMember member(chatRoomId, userId, role);
+      std::string displayName = std::string(rs->getString("display_name"));
+      if (displayName.empty()) {
+        displayName = std::string(rs->getString("nickname"));
+      }
+
+      // 创建新成员对象
+      ChatRoomMember newMember(chatRoomId, userId, role);
+      newMember.setDisplayName(displayName);
+
+      // 将新成员添加到成员列表并缓存
+      cacheChatRoomMember(newMember);
+
+      // 缓存成员
+      cacheChatRoomMember(member);
+    }
+
+    LOG_INFO << "Updated members cache for chat room " << chatRoomId;
+  } catch (std::exception& e) {
+    LOG_ERROR << "updateChatRoomMembersInCache error: " << e.what();
+  }
+}
+
+// 获取聊天室成员ID列表
+std::vector<uint64_t> ChatServiceImpl::getChatRoomMemberIdsFromCache(
+    uint64_t chatRoomId) {
+  std::vector<uint64_t> memberIds;
+
+  try {
+    auto& redis = RedisManager::getInstance();
+
+    // 获取成员ID列表
+    std::string membersKey =
+        "chat_room:" + std::to_string(chatRoomId) + ":members";
+    auto members = redis.smembers(membersKey);
+
+    if (members && !members->empty()) {
+      for (const auto& idStr : *members) {
+        memberIds.push_back(std::stoull(idStr));
+      }
+
+      // 刷新缓存过期时间
+      redis.expire(membersKey, std::chrono::hours(24));
+    }
+
+    LOG_INFO << "Retrieved " << memberIds.size()
+             << " member IDs from cache for chat room " << chatRoomId;
+  } catch (std::exception& e) {
+    LOG_ERROR << "getChatRoomMemberIdsFromCache error: " << e.what();
+  }
+
+  return memberIds;
+}
+
+// 缓存私聊
+void ChatServiceImpl::cachePrivateChat(
+    const starrychat::PrivateChat& privateChat) {
+  try {
+    auto& redis = RedisManager::getInstance();
+
+    // 序列化私聊信息
+    std::string data = serializePrivateChat(privateChat);
+
+    // 存储私聊信息
+    std::string key = "private_chat:" + std::to_string(privateChat.id());
+    redis.set(key, data, std::chrono::hours(24));
+
+    // 缓存用户ID映射
+    std::string userMapKey =
+        "private_chat:users:" + std::to_string(privateChat.user1_id()) + ":" +
+        std::to_string(privateChat.user2_id());
+    redis.set(userMapKey, std::to_string(privateChat.id()),
+              std::chrono::hours(24));
+
+    // 缓存成员关系
+    std::string membersKey =
+        "private_chat:" + std::to_string(privateChat.id()) + ":members";
+    redis.sadd(membersKey, std::to_string(privateChat.user1_id()));
+    redis.sadd(membersKey, std::to_string(privateChat.user2_id()));
+    redis.expire(membersKey, std::chrono::hours(24));
+
+    LOG_INFO << "Cached private chat: " << privateChat.id();
+  } catch (std::exception& e) {
+    LOG_ERROR << "cachePrivateChat error: " << e.what();
+  }
+}
+
+// 从缓存获取私聊
+std::optional<starrychat::PrivateChat> ChatServiceImpl::getPrivateChatFromCache(
+    uint64_t privateChatId) {
+  try {
+    auto& redis = RedisManager::getInstance();
+    std::string key = "private_chat:" + std::to_string(privateChatId);
+
+    auto data = redis.get(key);
+    if (!data) {
+      return std::nullopt;
+    }
+
+    // 反序列化私聊信息
+    starrychat::PrivateChat privateChat = deserializePrivateChat(*data);
+
+    // 刷新缓存过期时间
+    redis.expire(key, std::chrono::hours(24));
+
+    return privateChat;
+  } catch (std::exception& e) {
+    LOG_ERROR << "getPrivateChatFromCache error: " << e.what();
+    return std::nullopt;
+  }
+}
+
+// 使私聊缓存失效
+void ChatServiceImpl::invalidatePrivateChatCache(uint64_t privateChatId) {
+  try {
+    auto& redis = RedisManager::getInstance();
+
+    // 获取私聊信息以便删除用户映射
+    auto cachedChat = getPrivateChatFromCache(privateChatId);
+    if (cachedChat) {
+      std::string userMapKey =
+          "private_chat:users:" + std::to_string(cachedChat->user1_id()) + ":" +
+          std::to_string(cachedChat->user2_id());
+      redis.del(userMapKey);
+    }
+
+    // 删除私聊缓存
+    redis.del("private_chat:" + std::to_string(privateChatId));
+
+    // 删除成员列表缓存
+    redis.del("private_chat:" + std::to_string(privateChatId) + ":members");
+
+    LOG_INFO << "Invalidated cache for private chat: " << privateChatId;
+  } catch (std::exception& e) {
+    LOG_ERROR << "invalidatePrivateChatCache error: " << e.what();
+  }
+}
+
+// 缓存用户聊天列表
+void ChatServiceImpl::cacheUserChatsList(
+    uint64_t userId,
+    const std::vector<starrychat::ChatSummary>& chats) {
+  try {
+    auto& redis = RedisManager::getInstance();
+    std::string key = "user:chats:" + std::to_string(userId);
+
+    // 序列化聊天列表
+    std::string data;
+    starrychat::GetUserChatsResponse response;
+    response.set_success(true);
+
+    for (const auto& chat : chats) {
+      *response.add_chats() = chat;
+    }
+
+    if (response.SerializeToString(&data)) {
+      // 存储聊天列表
+      redis.set(key, data,
+                std::chrono::minutes(
+                    30));  // 使用较短的过期时间，因为聊天列表会频繁变化
+      LOG_INFO << "Cached user chats list for user " << userId << " with "
+               << chats.size() << " chats";
+    }
+  } catch (std::exception& e) {
+    LOG_ERROR << "cacheUserChatsList error: " << e.what();
+  }
+}
+
+// 从缓存获取用户聊天列表
+std::optional<std::vector<starrychat::ChatSummary>>
+ChatServiceImpl::getUserChatsListFromCache(uint64_t userId) {
+  try {
+    auto& redis = RedisManager::getInstance();
+    std::string key = "user:chats:" + std::to_string(userId);
+
+    auto data = redis.get(key);
+    if (!data) {
+      return std::nullopt;
+    }
+
+    // 反序列化聊天列表
+    starrychat::GetUserChatsResponse response;
+    if (!response.ParseFromString(*data)) {
+      return std::nullopt;
+    }
+
+    // 刷新缓存过期时间
+    redis.expire(key, std::chrono::minutes(30));
+
+    // 转换为 vector
+    std::vector<starrychat::ChatSummary> result;
+    for (int i = 0; i < response.chats_size(); i++) {
+      result.push_back(response.chats(i));
+    }
+
+    return result;
+  } catch (std::exception& e) {
+    LOG_ERROR << "getUserChatsListFromCache error: " << e.what();
+    return std::nullopt;
+  }
+}
+
+// 使用户聊天列表缓存失效
+void ChatServiceImpl::invalidateUserChatsListCache(uint64_t userId) {
+  try {
+    auto& redis = RedisManager::getInstance();
+    std::string key = "user:chats:" + std::to_string(userId);
+    redis.del(key);
+    LOG_INFO << "Invalidated chats list cache for user " << userId;
+  } catch (std::exception& e) {
+    LOG_ERROR << "invalidateUserChatsListCache error: " << e.what();
+  }
+}
+
+// 序列化/反序列化辅助方法
+std::string ChatServiceImpl::serializeChatRoom(const ChatRoom& chatRoom) {
+  starrychat::ChatRoom proto = chatRoom.toProto();
+  std::string result;
+  proto.SerializeToString(&result);
+  return result;
+}
+
+ChatRoom ChatServiceImpl::deserializeChatRoom(const std::string& data) {
+  starrychat::ChatRoom proto;
+  proto.ParseFromString(data);
+  return ChatRoom::fromProto(proto);
+}
+
+std::string ChatServiceImpl::serializeChatRoomMember(
+    const ChatRoomMember& member) {
+  starrychat::ChatRoomMember proto = member.toProto();
+  std::string result;
+  proto.SerializeToString(&result);
+  return result;
+}
+
+ChatRoomMember ChatServiceImpl::deserializeChatRoomMember(
+    const std::string& data) {
+  starrychat::ChatRoomMember proto;
+  proto.ParseFromString(data);
+  return ChatRoomMember::fromProto(proto);
+}
+
+std::string ChatServiceImpl::serializePrivateChat(
+    const starrychat::PrivateChat& privateChat) {
+  std::string result;
+  privateChat.SerializeToString(&result);
+  return result;
+}
+
+starrychat::PrivateChat ChatServiceImpl::deserializePrivateChat(
+    const std::string& data) {
+  starrychat::PrivateChat privateChat;
+  privateChat.ParseFromString(data);
+  return privateChat;
 }
 
 }  // namespace StarryChat

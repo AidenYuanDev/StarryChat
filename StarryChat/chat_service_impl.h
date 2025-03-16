@@ -1,8 +1,11 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 #include "chat.pb.h"
+#include "chat_room.h"
 #include "service.h"
 
 namespace sql {
@@ -79,10 +82,13 @@ class ChatServiceImpl : public starrychat::ChatService {
   // 会话验证
   bool validateSession(const std::string& token, uint64_t userId);
 
-  // 权限检查
+  // 聊天室权限检查
   bool isChatRoomOwner(uint64_t userId, uint64_t chatRoomId);
   bool isChatRoomAdmin(uint64_t userId, uint64_t chatRoomId);
   bool isChatRoomMember(uint64_t userId, uint64_t chatRoomId);
+
+  // 私聊成员检查
+  bool isPrivateChatMember(uint64_t userId, uint64_t privateChatId);
 
   // 通知助手方法
   void notifyChatRoomChanged(uint64_t chatRoomId);
@@ -118,6 +124,43 @@ class ChatServiceImpl : public starrychat::ChatService {
   uint64_t getUnreadCount(uint64_t userId,
                           starrychat::ChatType type,
                           uint64_t chatId);
+
+  // Redis 缓存相关方法
+  // 聊天室缓存
+  void cacheChatRoom(const ChatRoom& chatRoom);
+  std::optional<ChatRoom> getChatRoomFromCache(uint64_t chatRoomId);
+  void invalidateChatRoomCache(uint64_t chatRoomId);
+
+  // 聊天室成员缓存
+  void cacheChatRoomMember(const ChatRoomMember& member);
+  std::vector<ChatRoomMember> getChatRoomMembersFromCache(uint64_t chatRoomId);
+  void addChatRoomMemberToCache(uint64_t chatRoomId,
+                                uint64_t userId,
+                                starrychat::MemberRole role);
+  void removeChatRoomMemberFromCache(uint64_t chatRoomId, uint64_t userId);
+  void updateChatRoomMembersInCache(uint64_t chatRoomId);
+  std::vector<uint64_t> getChatRoomMemberIdsFromCache(uint64_t chatRoomId);
+
+  // 私聊缓存
+  void cachePrivateChat(const starrychat::PrivateChat& privateChat);
+  std::optional<starrychat::PrivateChat> getPrivateChatFromCache(
+      uint64_t privateChatId);
+  void invalidatePrivateChatCache(uint64_t privateChatId);
+
+  // 用户聊天列表缓存
+  void cacheUserChatsList(uint64_t userId,
+                          const std::vector<starrychat::ChatSummary>& chats);
+  std::optional<std::vector<starrychat::ChatSummary>> getUserChatsListFromCache(
+      uint64_t userId);
+  void invalidateUserChatsListCache(uint64_t userId);
+
+  // 序列化/反序列化辅助方法
+  std::string serializeChatRoom(const ChatRoom& chatRoom);
+  ChatRoom deserializeChatRoom(const std::string& data);
+  std::string serializeChatRoomMember(const ChatRoomMember& member);
+  ChatRoomMember deserializeChatRoomMember(const std::string& data);
+  std::string serializePrivateChat(const starrychat::PrivateChat& privateChat);
+  starrychat::PrivateChat deserializePrivateChat(const std::string& data);
 };
 
 }  // namespace StarryChat

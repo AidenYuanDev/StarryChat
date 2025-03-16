@@ -208,7 +208,8 @@ void UserServiceImpl::Login(const starrychat::LoginRequestPtr& request,
     }
 
     if (!rs->isNull("created_time")) {
-      user.setId(rs->getUInt64("created_time"));
+      // 注意：这里不应该覆盖用户ID
+      // user.setId(rs->getUInt64("created_time")); // 这行是错的，已删除
     }
 
     if (!rs->isNull("last_login_time")) {
@@ -961,7 +962,7 @@ std::optional<User> UserServiceImpl::getUserFromCache(uint64_t userId) {
           std::stoi((*userData)["status"])));
 
     // if (userData->find("created_time") != userData->end())
-      // user.setCreatedTime(std::stoull((*userData)["created_time"]));
+    // user.setCreatedTime(std::stoull((*userData)["created_time"]));
 
     if (userData->find("last_login_time") != userData->end())
       user.setLastLoginTime(std::stoull((*userData)["last_login_time"]));
