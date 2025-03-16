@@ -1,7 +1,9 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 #include "message.pb.h"
 #include "service.h"
 
@@ -45,17 +47,49 @@ class MessageServiceImpl : public starrychat::MessageService {
   bool isValidChatMember(uint64_t userId,
                          starrychat::ChatType chatType,
                          uint64_t chatId);
-  uint64_t saveMessageToDatabase(const starrychat::Message& message);
-  void publishMessageNotification(const starrychat::Message& message);
-  void cacheRecentMessage(const starrychat::Message& message);
-  std::vector<uint64_t> getChatMembers(starrychat::ChatType chatType,
-                                       uint64_t chatId);
 
-  // 消息状态相关
-  void updateMessageStatusInDB(uint64_t messageId,
+  // 数据库操作方法
+  uint64_t saveMessageToDatabase(const starrychat::Message& message);
+  bool updateMessageStatusInDB(uint64_t messageId,
                                starrychat::MessageStatus status);
+
+  // Redis缓存方法
+  void cacheMessage(const starrychat::Message& message);
+  std::optional<starrychat::Message> getMessageFromCache(uint64_t messageId);
+  void invalidateMessageCache(uint64_t messageId);
+  void updateMessageTimeline(starrychat::ChatType chatType,
+                             uint64_t chatId,
+                             uint64_t messageId,
+                             uint64_t timestamp);
+  std::vector<uint64_t> getRecentMessageIds(starrychat::ChatType chatType,
+                                            uint64_t chatId,
+                                            int limit,
+                                            uint64_t beforeMsgId = 0);
+
+  // 通知方法
+  void publishMessageNotification(const starrychat::Message& message);
   void publishStatusChangeNotification(uint64_t messageId,
                                        starrychat::MessageStatus status);
+
+  // 未读消息管理
+  void incrementUnreadCount(uint64_t userId,
+                            starrychat::ChatType chatType,
+                            uint64_t chatId);
+  void resetUnreadCount(uint64_t userId,
+                        starrychat::ChatType chatType,
+                        uint64_t chatId);
+  uint64_t getUnreadCount(uint64_t userId,
+                          starrychat::ChatType chatType,
+                          uint64_t chatId);
+
+  // 用户和成员管理
+  std::vector<uint64_t> getChatMembers(starrychat::ChatType chatType,
+                                       uint64_t chatId);
+  std::string getLastMessagePreview(starrychat::ChatType chatType,
+                                    uint64_t chatId);
+  void updateLastMessage(starrychat::ChatType chatType,
+                         uint64_t chatId,
+                         const starrychat::Message& message);
 };
 
 }  // namespace StarryChat

@@ -4,6 +4,7 @@
 #include <string>
 #include "service.h"
 #include "user.pb.h"
+#include "user.h"
 
 namespace sql {
 class Connection;
@@ -45,6 +46,11 @@ class UserServiceImpl : public starrychat::UserService {
                     const starrychat::UserInfo* responsePrototype,
                     const starry::RpcDoneCallback& done) override;
 
+  // 心跳方法
+  void UpdateHeartbeat(const starrychat::UserHeartbeatRequestPtr& request,
+                       const starrychat::HeartbeatResponse* responsePrototype,
+                       const starry::RpcDoneCallback& done) override;
+
  private:
   // 获取数据库连接
   std::shared_ptr<sql::Connection> getConnection();
@@ -57,6 +63,12 @@ class UserServiceImpl : public starrychat::UserService {
 
   // 用户状态管理
   void updateUserOnlineStatus(uint64_t userId, starrychat::UserStatus status);
+
+  // Redis缓存相关方法
+  void cacheUserInfo(const User& user);
+  std::optional<User> getUserFromCache(uint64_t userId);
+  void invalidateUserCache(uint64_t userId);
+  void updateUserStatusInCache(uint64_t userId, starrychat::UserStatus status);
 };
 
 }  // namespace StarryChat

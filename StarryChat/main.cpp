@@ -10,6 +10,80 @@
 #include "rpc_server.h"
 #include "user_service_impl.h"
 
+// 用户心跳检测线程
+void startHeartbeatCheckerThread() {
+  std::thread([] {
+    LOG_INFO << "Starting user heartbeat checker thread";
+    auto& redis = StarryChat::RedisManager::getInstance();
+
+    while (true) {
+      try {
+        // 获取所有在线用户
+        auto onlineUsers = redis.smembers("users:online");
+        if (onlineUsers && !onlineUsers->empty()) {
+          LOG_INFO << "Checking heartbeats for " << onlineUsers->size()
+                   << " online users";
+
+          for (const auto& userId : *onlineUsers) {
+            // 检查心跳是否存在
+            std::string heartbeatKey = "user:heartbeat:" + userId;
+            if (!redis.exists(heartbeatKey)) {
+              // 心跳过期，用户可能断线
+              LOG_INFO << "User " << userId
+                       << " heartbeat expired, marking as offline";
+
+              // 更新状态为离线
+              redis.hset("user:status", userId,
+                         std::to_string(static_cast<int>(
+                             starrychat::USER_STATUS_OFFLINE)));
+
+              // 从在线用户集合中移除
+              redis.srem("users:online", userId);
+
+              // 发布状态变更通知
+              std::string notification = userId + ":" +
+                                         std::to_string(static_cast<int>(
+                                             starrychat::USER_STATUS_OFFLINE));
+              redis.publish("user:status:changed", notification);
+
+              // 更新用户信息缓存
+              std::string userKey = "user:" + userId;
+              redis.hset(userKey, "status",
+                         std::to_string(static_cast<int>(
+                             starrychat::USER_STATUS_OFFLINE)));
+
+              // 异步更新数据库
+              auto& dbManager = StarryChat::DBManager::getInstance();
+              if (auto conn = dbManager.getConnection()) {
+                try {
+                  std::unique_ptr<sql::PreparedStatement> stmt(
+                      conn->prepareStatement(
+                          "UPDATE users SET status = ? WHERE id = ?"));
+                  stmt->setInt(
+                      1, static_cast<int>(starrychat::USER_STATUS_OFFLINE));
+                  stmt->setUInt64(2, std::stoull(userId));
+                  stmt->executeUpdate();
+                  LOG_INFO << "Updated database status to offline for user "
+                           << userId;
+                } catch (sql::SQLException& e) {
+                  LOG_ERROR << "SQL error in heartbeat checker: " << e.what();
+                }
+              }
+            }
+          }
+        }
+      } catch (const std::exception& e) {
+        LOG_ERROR << "Error in heartbeat checker: " << e.what();
+      }
+
+      // 每分钟检查一次
+      std::this_thread::sleep_for(std::chrono::minutes(1));
+    }
+  }).detach();
+
+  LOG_INFO << "Heartbeat checker thread started";
+}
+
 // 全局事件循环指针，用于信号处理
 starry::EventLoop* g_loop = nullptr;
 
@@ -22,6 +96,8 @@ void signalHandler(int sig) {
 }
 
 int main() {
+  // 在启动服务器后，启动心跳检测线程
+  startHeartbeatCheckerThread();
   // 设置日志级别
   starry::Logger::setLogLevel(starry::LogLevel::INFO);
   LOG_INFO << "Starting StarryChat server...";

@@ -66,6 +66,17 @@ message UserStatusUpdate {
   UserStatus status = 2;      // 新的状态
 }
 
+// 用户心跳请求
+message UserHeartbeatRequest {
+  uint64 user_id = 1;
+  string session_token = 2;
+}
+
+// 心跳响应
+message HeartbeatResponse {
+  bool success = 1;
+}
+
 // 用户资料更新请求
 message UpdateProfileRequest {
   uint64 user_id = 1;         // 用户ID
@@ -138,4 +149,7 @@ service UserService {
   
   // 用户状态更新
   rpc UpdateStatus(UserStatusUpdate) returns (UserInfo) {}
+  
+  // 更新用户心跳
+  rpc UpdateHeartbeat(UserHeartbeatRequest) returns (HeartbeatResponse) {}
 }
