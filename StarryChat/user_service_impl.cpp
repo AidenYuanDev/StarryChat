@@ -36,6 +36,9 @@ void UserServiceImpl::RegisterUser(
   }
   auto response = responsePrototype->New();
 
+  // Modified section from user_service_impl.cpp
+  // Inside RegisterUser method
+
   try {
     auto conn = getConnection();
 
@@ -47,14 +50,16 @@ void UserServiceImpl::RegisterUser(
     checkStmt->setString(1, request->username());
 
     std::unique_ptr<sql::ResultSet> checkRs(checkStmt->executeQuery());
-    if (checkRs->next()) {
+    bool userExists =
+        checkRs->next();  // Store the result to avoid calling next() twice
+    if (userExists) {
       response->set_success(false);
       response->set_error_message("Username already exists");
       done(response);
       return;
     }
     LOG_INFO << "Username exists check result: "
-             << (checkRs->next() ? "exists" : "new");
+             << (userExists ? "exists" : "new");
 
     // 创建用户对象处理密码
     User user(0, request->username());
@@ -65,7 +70,6 @@ void UserServiceImpl::RegisterUser(
     LOG_INFO << "Executing insert SQL for username: " << user.getUsername();
 
     // 插入新用户
-    // 修改后的插入语句
     std::unique_ptr<sql::PreparedStatement> stmt(
         conn->prepareStatement("INSERT INTO users (username, nickname, email, "
                                "status, created_time, password_hash, salt) "
@@ -81,12 +85,12 @@ void UserServiceImpl::RegisterUser(
     stmt->setString(6, user.getPasswordHash());
     stmt->setString(7, user.getSalt());
 
-    // 然后执行SQL
+    // 执行SQL（仅执行一次）
     int result = stmt->executeUpdate();
     LOG_INFO << "SQL execution result: "
              << (result > 0 ? "success" : "failure");
 
-    if (stmt->executeUpdate() > 0) {
+    if (result > 0) {  // 使用已存储的结果，而不是再次执行
       // 获取新用户ID
       std::unique_ptr<sql::ResultSet> rs(stmt->getGeneratedKeys());
       if (rs->next()) {
