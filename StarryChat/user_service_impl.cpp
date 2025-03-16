@@ -20,7 +20,20 @@ void UserServiceImpl::RegisterUser(
     const starrychat::RegisterUserRequestPtr& request,
     const starrychat::RegisterUserResponse* responsePrototype,
     const starry::RpcDoneCallback& done) {
-  LOG_INFO << "RegisterUser called with username: " << request->username();
+  LOG_INFO << "RegisterUser called with username: [" << request->username()
+           << "], length: " << request->username().length() << ", email: ["
+           << request->email() << "]";
+  LOG_INFO << "RegisterUser request: " << request->ShortDebugString();
+  LOG_INFO << "Request binary size: " << request->ByteSizeLong();
+
+  // 确保用户名不为空
+  if (request->username().empty()) {
+    auto response = responsePrototype->New();
+    response->set_success(false);
+    response->set_error_message("Username cannot be empty");
+    done(response);
+    return;
+  }
   auto response = responsePrototype->New();
 
   try {
@@ -58,16 +71,20 @@ void UserServiceImpl::RegisterUser(
                                "status, created_time, password_hash, salt) "
                                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                                sql::Statement::RETURN_GENERATED_KEYS));
-    LOG_INFO << "SQL execution result: "
-             << (stmt->executeUpdate() > 0 ? "success" : "failure");
+
+    // 先设置所有参数
     stmt->setString(1, user.getUsername());
     stmt->setString(2, user.getNickname());
     stmt->setString(3, user.getEmail());
     stmt->setInt(4, static_cast<int>(starrychat::USER_STATUS_OFFLINE));
     stmt->setUInt64(5, std::time(nullptr));
-    // 添加密码哈希和盐值 - 从User对象获取这些值
-    stmt->setString(6, user.getPasswordHash());  // 需要在User类中添加getter
-    stmt->setString(7, user.getSalt());          // 需要在User类中添加getter
+    stmt->setString(6, user.getPasswordHash());
+    stmt->setString(7, user.getSalt());
+
+    // 然后执行SQL
+    int result = stmt->executeUpdate();
+    LOG_INFO << "SQL execution result: "
+             << (result > 0 ? "success" : "failure");
 
     if (stmt->executeUpdate() > 0) {
       // 获取新用户ID
@@ -107,6 +124,18 @@ void UserServiceImpl::RegisterUser(
 void UserServiceImpl::Login(const starrychat::LoginRequestPtr& request,
                             const starrychat::LoginResponse* responsePrototype,
                             const starry::RpcDoneCallback& done) {
+  // 添加更详细的日志
+  LOG_INFO << "Login called with username: [" << request->username()
+           << "], length: " << request->username().length();
+
+  // 确保用户名不为空
+  if (request->username().empty()) {
+    auto response = responsePrototype->New();
+    response->set_success(false);
+    response->set_error_message("Username cannot be empty");
+    done(response);
+    return;
+  }
   auto response = responsePrototype->New();
 
   try {
