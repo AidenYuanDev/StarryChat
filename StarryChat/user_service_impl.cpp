@@ -20,10 +20,13 @@ void UserServiceImpl::RegisterUser(
     const starrychat::RegisterUserRequestPtr& request,
     const starrychat::RegisterUserResponse* responsePrototype,
     const starry::RpcDoneCallback& done) {
+  LOG_INFO << "RegisterUser called with username: " << request->username();
   auto response = responsePrototype->New();
 
   try {
     auto conn = getConnection();
+
+    LOG_INFO << "Checking if username exists: " << request->username();
 
     // 检查用户名是否已存在
     std::unique_ptr<sql::PreparedStatement> checkStmt(
@@ -37,6 +40,8 @@ void UserServiceImpl::RegisterUser(
       done(response);
       return;
     }
+    LOG_INFO << "Username exists check result: "
+             << (checkRs->next() ? "exists" : "new");
 
     // 创建用户对象处理密码
     User user(0, request->username());
@@ -44,18 +49,25 @@ void UserServiceImpl::RegisterUser(
     user.setNickname(request->nickname());
     user.setEmail(request->email());
     user.setStatus(starrychat::USER_STATUS_OFFLINE);
+    LOG_INFO << "Executing insert SQL for username: " << user.getUsername();
 
     // 插入新用户
-    std::unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
-        "INSERT INTO users (username, nickname, email, status, created_time) "
-        "VALUES (?, ?, ?, ?, ?)",
-        sql::Statement::RETURN_GENERATED_KEYS));
-
+    // 修改后的插入语句
+    std::unique_ptr<sql::PreparedStatement> stmt(
+        conn->prepareStatement("INSERT INTO users (username, nickname, email, "
+                               "status, created_time, password_hash, salt) "
+                               "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                               sql::Statement::RETURN_GENERATED_KEYS));
+    LOG_INFO << "SQL execution result: "
+             << (stmt->executeUpdate() > 0 ? "success" : "failure");
     stmt->setString(1, user.getUsername());
     stmt->setString(2, user.getNickname());
     stmt->setString(3, user.getEmail());
     stmt->setInt(4, static_cast<int>(starrychat::USER_STATUS_OFFLINE));
     stmt->setUInt64(5, std::time(nullptr));
+    // 添加密码哈希和盐值 - 从User对象获取这些值
+    stmt->setString(6, user.getPasswordHash());  // 需要在User类中添加getter
+    stmt->setString(7, user.getSalt());          // 需要在User类中添加getter
 
     if (stmt->executeUpdate() > 0) {
       // 获取新用户ID
@@ -75,6 +87,9 @@ void UserServiceImpl::RegisterUser(
       response->set_success(false);
       response->set_error_message("Failed to insert user");
     }
+    LOG_INFO << "User registered - ID: " << user.getId()
+             << ", Username: " << user.getUsername()
+             << ", Nickname: " << user.getNickname();
   } catch (sql::SQLException& e) {
     LOG_ERROR << "RegisterUser SQL error: " << e.what();
     response->set_success(false);
@@ -113,6 +128,15 @@ void UserServiceImpl::Login(const starrychat::LoginRequestPtr& request,
     // 创建用户对象并验证密码
     User user(rs->getUInt64("id"), std::string(rs->getString("username")));
     // ...设置其他字段
+    user.setNickname(std::string(rs->getString("nickname")));
+    user.setEmail(std::string(rs->getString("email")));
+    user.setStatus(static_cast<starrychat::UserStatus>(rs->getInt("status")));
+
+    // 设置密码相关字段 - 这是关键
+    std::string passwordHash = std::string(rs->getString("password_hash"));
+    std::string salt = std::string(rs->getString("salt"));
+    // 需要在User类中添加一个方法来直接设置密码哈希和盐值
+    user.setPasswordHashAndSalt(passwordHash, salt);
 
     if (!user.verifyPassword(request->password())) {
       response->set_success(false);
@@ -172,7 +196,12 @@ void UserServiceImpl::GetUser(
     if (rs->next()) {
       // 从数据库结果创建用户对象
       User user(rs->getUInt64("id"), std::string(rs->getString("username")));
+      user.setNickname(std::string(rs->getString("nickname")));
+      user.setEmail(std::string(rs->getString("email")));
       // ...设置其他字段
+      LOG_INFO << "Loaded user from DB - ID: " << user.getId()
+               << ", Username: " << user.getUsername()
+               << ", Nickname: " << user.getNickname();
 
       // 设置响应
       response->set_success(true);

@@ -67,3 +67,37 @@ target_link_libraries(StarryChat PRIVATE
   yaml-cpp::yaml-cpp
   rpc
 )
+
+add_library(StarryChatLib)
+
+target_sources(StarryChatLib PRIVATE
+  ${GENERATED_PB_FILES}  # 将生成的文件添加到库中
+  ./config.cpp
+  ./user.cpp
+  ./message.cpp
+  ./chat_room.cpp
+  ./db_manager.cpp
+  ./redis_manager.cpp
+  ./user_service_impl.cpp
+  ./chat_service_impl.cpp
+  ./message_service_impl.cpp
+)
+
+target_include_directories(StarryChatLib PUBLIC
+  .
+  ${Protobuf_INCLUDE_DIRS}
+  ${PROTO_OUT_DIR}
+  ${HIREDIS_HEADER}
+  ${REDIS_PLUS_PLUS_HEADER}
+  ${MARIADB_CONNECTOR_INCLUDE_DIR}
+)
+
+target_link_libraries(StarryChatLib PUBLIC
+  ${Protobuf_LIBRARIES}
+  ${HIREDIS_LIB}
+  ${REDIS_PLUS_PLUS_LIB}
+  ${MARIADB_CONNECTOR_LIBRARY}
+  OpenSSL::Crypto
+  yaml-cpp::yaml-cpp
+  rpc
+)

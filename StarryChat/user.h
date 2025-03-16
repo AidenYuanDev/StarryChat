@@ -34,6 +34,15 @@ class User {
   time_t getLastLoginTime() const { return lastLoginTime_; }
   time_t getCreatedTime() const { return createdTime_; }
   uint32_t getLoginAttempts() const { return loginAttempts_; }
+  // 添加到user.h的User类公共方法中
+  const std::string& getPasswordHash() const { return passwordHash_; }
+  const std::string& getSalt() const { return salt_; }
+  // 添加到user.h的User类中
+  void setPasswordHashAndSalt(const std::string& hash,
+                              const std::string& salt) {
+    passwordHash_ = hash;
+    salt_ = salt;
+  }
 
   // 设置器
   void setNickname(const std::string& nickname) { nickname_ = nickname; }

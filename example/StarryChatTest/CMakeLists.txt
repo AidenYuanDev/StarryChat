@@ -1,11 +1,10 @@
 add_executable(test_service)
 
 target_sources(test_service PRIVATE
-  ${GENERATED_PB_FILES}  # 将生成的文件添加到库中
   ./test_service.cpp
 )
 
-target_include_directories(test_service PRIVATE 
+target_include_directories(test_service PRIVATE
   .
   ${Protobuf_INCLUDE_DIRS}
   ${CMAKE_BINARY_DIR}/generated/StarryChat
@@ -22,4 +21,5 @@ target_link_libraries(test_service PRIVATE
   OpenSSL::Crypto
   yaml-cpp::yaml-cpp
   rpc
+  StarryChatLib
 )
