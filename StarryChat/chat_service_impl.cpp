@@ -1837,9 +1837,11 @@ void ChatServiceImpl::cacheChatRoomMember(const ChatRoomMember& member) {
     redis.sadd(membersKey, std::to_string(userId));
     redis.expire(membersKey, std::chrono::hours(24));
 
-    // 缓存成员角色
-    redis.hset(memberKey, "role",
-               std::to_string(static_cast<int>(member.getRole())));
+    // 缓存成员角色 - Use a separate key for the role
+    std::string roleKey = "chat_room:" + std::to_string(chatRoomId) +
+                          ":member_role:" + std::to_string(userId);
+    redis.set(roleKey, std::to_string(static_cast<int>(member.getRole())),
+              std::chrono::hours(24));
 
     LOG_INFO << "Cached chat room member: Room " << chatRoomId << ", User "
              << userId;
