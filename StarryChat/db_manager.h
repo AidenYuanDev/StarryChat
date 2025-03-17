@@ -212,7 +212,7 @@ class DBManager {
   }
 
   // 递归终止
-  static void bindParameters(sql::PreparedStatement* stmt, int index) {}
+  static void bindParameters(sql::PreparedStatement*, int) {}
 
   // 为各种类型提供绑定实现
   static void bindParameter(sql::PreparedStatement* stmt,
