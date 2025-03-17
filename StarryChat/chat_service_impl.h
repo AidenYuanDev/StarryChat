@@ -100,10 +100,11 @@ class ChatServiceImpl : public starrychat::ChatService {
                                 uint64_t user2Id);
 
   // 聊天室辅助方法
-  uint64_t createChatRoomInDB(const std::string& name,
-                              uint64_t creatorId,
-                              const std::string& description,
-                              const std::string& avatarUrl);
+  bool createChatRoomInDB(const std::string& name,
+                          uint64_t creatorId,
+                          const std::string& description,
+                          const std::string& avatarUrl,
+                          uint64_t& outChatRoomId);
 
   bool addChatRoomMemberToDB(uint64_t chatRoomId,
                              uint64_t userId,

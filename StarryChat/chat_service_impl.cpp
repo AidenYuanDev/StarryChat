@@ -186,7 +186,8 @@ void ChatServiceImpl::GetChatRoom(
         member.setDisplayName(displayName);
 
         // 添加到成员列表
-        members.push_back(member);
+        members.emplace_back(member.getChatRoomId(), member.getUserId(),
+                             member.getRole());
 
         // 缓存成员信息
         cacheChatRoomMember(member);
