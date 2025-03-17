@@ -1,7 +1,9 @@
 #pragma once
 
+#include <unistd.h>
 #include <yaml-cpp/node/node.h>
 #include <yaml-cpp/yaml.h>
+#include <cstdint>
 #include <string>
 #include "logging.h"
 
@@ -37,7 +39,10 @@ class Config {
   int getRedisPoolSize() const;
 
   // Logging
+  std::string getLoggingBaseName() const;
   starry::LogLevel getLoggingLevel() const;
+  int64_t getLoggingRollSize() const;
+  int64_t getLoggingRefreshInterval() const;
 
  private:
   Config() = default;
@@ -68,7 +73,10 @@ class Config {
   int redisPoolSize_;
 
   // Logging
+  std::string loggingBaseName_;
   starry::LogLevel loggingLevel_;
+  off_t loggingRollSize_;
+  int64_t loggingRefreshInterval_;
 };
 
 }  // namespace StarryChat

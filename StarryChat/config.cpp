@@ -1,5 +1,8 @@
+#include <unistd.h>
 #include <yaml-cpp/node/parse.h>
 #include <cctype>
+#include <cstdint>
+#include <string>
 #include "config.h"
 #include "logging.h"
 
@@ -78,11 +81,11 @@ bool Config::loadConfig(const std::string& configFilePath) {
   mariaDBDatabase_ =
       configFile_["database"]["mariadb"]["database"].as<std::string>();
 
-  if (!configFile_["database"]["mariadb"]["pool_size"]) {
-    LOG_ERROR << "config file not set database mariadb pool_size";
+  if (!configFile_["database"]["mariadb"]["poolSize"]) {
+    LOG_ERROR << "config file not set database mariadb poolSize";
     return false;
   }
-  mariaDBPoolSize_ = configFile_["database"]["mariadb"]["pool_size"].as<int>();
+  mariaDBPoolSize_ = configFile_["database"]["mariadb"]["poolSize"].as<int>();
 
   if (!configFile_["database"]["redis"]["host"]) {
     LOG_ERROR << "config file not set database redis host";
@@ -109,11 +112,33 @@ bool Config::loadConfig(const std::string& configFilePath) {
   }
   redisDB_ = configFile_["database"]["redis"]["db"].as<int>();
 
-  if (!configFile_["database"]["redis"]["pool_size"]) {
-    LOG_ERROR << "config file not set database redis pool_size";
+  if (!configFile_["database"]["redis"]["poolSize"]) {
+    LOG_ERROR << "config file not set database redis poolSize";
     return false;
   }
-  redisPoolSize_ = configFile_["database"]["redis"]["pool_size"].as<int>();
+  redisPoolSize_ = configFile_["database"]["redis"]["poolSize"].as<int>();
+
+  if (!configFile_["logging"]["basename"]) {
+    LOG_ERROR << "config file not set logging basename";
+    return false;
+  }
+
+  loggingBaseName_ = configFile_["logging"]["basename"].as<std::string>();
+
+  if (!configFile_["logging"]["rollSize"]) {
+    LOG_ERROR << "config file not set logging rollSize";
+    return false;
+  }
+
+  loggingRollSize_ = configFile_["logging"]["rollSize"].as<off_t>();
+
+  if (!configFile_["logging"]["refreshInterval"]) {
+    LOG_ERROR << "config file not set logging refreshInterval";
+    return false;
+  }
+
+  loggingRefreshInterval_ =
+      configFile_["logging"]["refreshInterval"].as<int64_t>();
 
   if (!configFile_["logging"]["level"]) {
     LOG_ERROR << "config file not set logging level";
@@ -211,6 +236,18 @@ int Config::getRedisPoolSize() const {
   return redisPoolSize_;
 }
 
+std::string Config::getLoggingBaseName() const {
+  return loggingBaseName_;
+}
+
 starry::LogLevel Config::getLoggingLevel() const {
   return loggingLevel_;
+}
+
+off_t Config::getLoggingRollSize() const {
+  return loggingRollSize_;
+}
+
+int64_t Config::getLoggingRefreshInterval() const {
+  return loggingRefreshInterval_;
 }

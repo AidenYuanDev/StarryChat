@@ -10,14 +10,17 @@ database:
     username: "root"
     password: ""
     database: "chatroom"
-    pool_size: 20
+    poolSize: 20
 
   redis:
     host: "localhost"
     port: 6379
     password: ""
     db: 0
-    pool_size: 20
+    poolSize: 20
 
 logging:
+  basename: "StarryChat"
   level: "info"  # trace, debug, info, warn, error, fatal
+  rollSize: 67108864
+  refreshInterval: 3 # minute

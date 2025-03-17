@@ -1,4 +1,6 @@
 #include <signal.h>
+#include <memory>
+#include "async_logging.h"
 #include "chat_service_impl.h"
 #include "config.h"
 #include "db_manager.h"
@@ -96,23 +98,30 @@ void signalHandler(int sig) {
 }
 
 int main() {
-  // 在启动服务器后，启动心跳检测线程
-  startHeartbeatCheckerThread();
-  // 设置日志级别
-  starry::Logger::setLogLevel(starry::LogLevel::INFO);
-  LOG_INFO << "Starting StarryChat server...";
-
   // 加载配置
   auto& config = StarryChat::Config::getInstance();
+
   if (!config.loadConfig("config.yaml")) {
     LOG_ERROR << "Failed to load config file";
     return 1;
   }
+
+  std::unique_ptr<starry::AsyncLogging> asyncLog =
+      std::make_unique<starry::AsyncLogging>(
+          config.getLoggingBaseName(), config.getLoggingRollSize(),
+          config.getLoggingRefreshInterval());
+
+  starry::Logger::setLogLevel(config.getLoggingLevel());
+
+  asyncLog->start();
+
+  starry::Logger::setOutput(
+      [&asyncLog](const char* msg, int len) { asyncLog->append(msg, len); });
+
+  LOG_INFO << "Starting StarryChat server...";
+
   LOG_INFO << "Config loaded, server will listen on port "
            << config.getServerPort();
-
-  // 初始化日志级别
-  starry::Logger::setLogLevel(config.getLoggingLevel());
 
   // 初始化数据库连接
   auto& dbManager = StarryChat::DBManager::getInstance();
@@ -129,6 +138,9 @@ int main() {
     return 1;
   }
   LOG_INFO << "Redis connection initialized";
+
+  // 在启动服务器后，启动心跳检测线程
+  startHeartbeatCheckerThread();
 
   // 创建事件循环
   starry::EventLoop loop;
@@ -168,6 +180,7 @@ int main() {
   LOG_INFO << "Shutting down StarryChat server...";
   dbManager.shutdown();
   redisManager.shutdown();
+  asyncLog->stop();
 
   LOG_INFO << "StarryChat server stopped";
   return 0;
