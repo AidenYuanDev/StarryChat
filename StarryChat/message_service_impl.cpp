@@ -1,17 +1,12 @@
 #include "message_service_impl.h"
 
 #include <chrono>
-#include <mariadb/conncpp.hpp>
 #include "db_manager.h"
 #include "logging.h"
 #include "message.h"
 #include "redis_manager.h"
 
 namespace StarryChat {
-
-std::shared_ptr<sql::Connection> MessageServiceImpl::getConnection() {
-  return DBManager::getInstance().getConnection();
-}
 
 // 获取消息历史
 void MessageServiceImpl::GetMessages(
@@ -20,172 +15,178 @@ void MessageServiceImpl::GetMessages(
     const starry::RpcDoneCallback& done) {
   auto response = responsePrototype->New();
 
-  try {
-    // 验证用户是否为聊天成员
-    if (!isValidChatMember(request->user_id(), request->chat_type(),
-                           request->chat_id())) {
+  // 验证用户是否为聊天成员
+  if (!isValidChatMember(request->user_id(), request->chat_type(),
+                         request->chat_id())) {
+    response->set_success(false);
+    response->set_error_message("Not a member of this chat");
+    done(response);
+    return;
+  }
+
+  LOG_INFO << "Fetching messages for chat type: "
+           << static_cast<int>(request->chat_type())
+           << ", chat ID: " << request->chat_id();
+
+  // 首先尝试从Redis缓存获取消息ID列表
+  auto messageIds = getRecentMessageIds(
+      request->chat_type(), request->chat_id(),
+      request->limit() > 0 ? request->limit() : 20, request->before_msg_id());
+
+  // 标记是否从缓存获取了消息
+  bool useCache = !messageIds.empty();
+
+  // 如果成功从缓存获取了消息ID列表
+  if (useCache) {
+    LOG_INFO << "Found " << messageIds.size() << " message IDs in cache";
+
+    // 尝试从缓存获取消息数据
+    for (uint64_t messageId : messageIds) {
+      auto cachedMessage = getMessageFromCache(messageId);
+      if (cachedMessage) {
+        *response->add_messages() = *cachedMessage;
+      } else {
+        // 如果有任何一条消息未命中缓存，切换到数据库查询所有消息
+        LOG_INFO << "Cache miss for message ID: " << messageId
+                 << ", falling back to database";
+        useCache = false;
+        break;
+      }
+    }
+  }
+
+  // 如果缓存未命中或不完整，从数据库查询
+  if (!useCache) {
+    LOG_INFO << "Querying messages from database";
+
+    // 构建查询条件
+    std::string query =
+        "SELECT * FROM messages WHERE chat_type = ? AND chat_id = ?";
+
+    if (request->start_time() > 0) {
+      query += " AND timestamp >= ?";
+    }
+    if (request->end_time() > 0) {
+      query += " AND timestamp <= ?";
+    }
+    if (request->before_msg_id() > 0) {
+      query += " AND id < ?";
+    }
+
+    query += " ORDER BY timestamp DESC LIMIT ?";
+
+    // 根据条件数量执行不同的查询
+    std::unique_ptr<sql::ResultSet> rs;
+    bool querySuccess = false;
+
+    // 基于参数的不同组合执行查询
+    if (request->start_time() > 0 && request->end_time() > 0 &&
+        request->before_msg_id() > 0) {
+      querySuccess = DBManager::executeQuery(
+          query, rs, static_cast<int>(request->chat_type()), request->chat_id(),
+          request->start_time(), request->end_time(), request->before_msg_id(),
+          request->limit() > 0 ? request->limit() : 20);
+    } else if (request->start_time() > 0 && request->end_time() > 0) {
+      querySuccess = DBManager::executeQuery(
+          query, rs, static_cast<int>(request->chat_type()), request->chat_id(),
+          request->start_time(), request->end_time(),
+          request->limit() > 0 ? request->limit() : 20);
+    } else if (request->start_time() > 0 && request->before_msg_id() > 0) {
+      querySuccess = DBManager::executeQuery(
+          query, rs, static_cast<int>(request->chat_type()), request->chat_id(),
+          request->start_time(), request->before_msg_id(),
+          request->limit() > 0 ? request->limit() : 20);
+    } else if (request->end_time() > 0 && request->before_msg_id() > 0) {
+      querySuccess = DBManager::executeQuery(
+          query, rs, static_cast<int>(request->chat_type()), request->chat_id(),
+          request->end_time(), request->before_msg_id(),
+          request->limit() > 0 ? request->limit() : 20);
+    } else if (request->start_time() > 0) {
+      querySuccess = DBManager::executeQuery(
+          query, rs, static_cast<int>(request->chat_type()), request->chat_id(),
+          request->start_time(), request->limit() > 0 ? request->limit() : 20);
+    } else if (request->end_time() > 0) {
+      querySuccess = DBManager::executeQuery(
+          query, rs, static_cast<int>(request->chat_type()), request->chat_id(),
+          request->end_time(), request->limit() > 0 ? request->limit() : 20);
+    } else if (request->before_msg_id() > 0) {
+      querySuccess = DBManager::executeQuery(
+          query, rs, static_cast<int>(request->chat_type()), request->chat_id(),
+          request->before_msg_id(),
+          request->limit() > 0 ? request->limit() : 20);
+    } else {
+      querySuccess = DBManager::executeQuery(
+          query, rs, static_cast<int>(request->chat_type()), request->chat_id(),
+          request->limit() > 0 ? request->limit() : 20);
+    }
+
+    if (!querySuccess) {
+      LOG_ERROR << "Failed to query messages for chat type: "
+                << static_cast<int>(request->chat_type())
+                << ", chat ID: " << request->chat_id();
       response->set_success(false);
-      response->set_error_message("Not a member of this chat");
+      response->set_error_message("Failed to query messages");
       done(response);
       return;
     }
 
-    LOG_INFO << "Fetching messages for chat type: "
-             << static_cast<int>(request->chat_type())
-             << ", chat ID: " << request->chat_id();
+    // 清空之前的结果，避免重复
+    response->clear_messages();
 
-    // 首先尝试从Redis缓存获取消息ID列表
-    auto messageIds = getRecentMessageIds(
-        request->chat_type(), request->chat_id(),
-        request->limit() > 0 ? request->limit() : 20, request->before_msg_id());
+    // 处理结果
+    while (rs->next()) {
+      Message message;
+      message.setId(rs->getUInt64("id"));
+      message.setSenderId(rs->getUInt64("sender_id"));
+      message.setChatType(
+          static_cast<starrychat::ChatType>(rs->getInt("chat_type")));
+      message.setChatId(rs->getUInt64("chat_id"));
+      message.setType(static_cast<starrychat::MessageType>(rs->getInt("type")));
+      message.setTimestamp(rs->getUInt64("timestamp"));
+      message.setStatus(
+          static_cast<starrychat::MessageStatus>(rs->getInt("status")));
 
-    // 标记是否从缓存获取了消息
-    bool useCache = !messageIds.empty();
-
-    // 如果成功从缓存获取了消息ID列表
-    if (useCache) {
-      LOG_INFO << "Found " << messageIds.size() << " message IDs in cache";
-
-      // 尝试从缓存获取消息数据
-      for (uint64_t messageId : messageIds) {
-        auto cachedMessage = getMessageFromCache(messageId);
-        if (cachedMessage) {
-          *response->add_messages() = *cachedMessage;
-        } else {
-          // 如果有任何一条消息未命中缓存，切换到数据库查询所有消息
-          LOG_INFO << "Cache miss for message ID: " << messageId
-                   << ", falling back to database";
-          useCache = false;
-          break;
-        }
+      // 根据消息类型设置内容
+      if (message.isTextMessage()) {
+        message.setText(std::string(rs->getString("content")));
+      } else if (message.isSystemMessage()) {
+        message.setSystemMessage(std::string(rs->getString("content")),
+                                 std::string(rs->getString("system_code")), {});
       }
+
+      // 处理回复和提及
+      if (rs->getUInt64("reply_to_id") > 0) {
+        message.setReplyToId(rs->getUInt64("reply_to_id"));
+      }
+
+      // 添加到响应
+      *response->add_messages() = message.toProto();
+
+      // 缓存消息
+      cacheMessage(message.toProto());
     }
 
-    // 如果缓存未命中或不完整，从数据库查询
-    if (!useCache) {
-      LOG_INFO << "Querying messages from database";
-      auto conn = getConnection();
-      if (!conn) {
-        response->set_success(false);
-        response->set_error_message("Database connection failed");
-        done(response);
-        return;
-      }
-
-      std::string query =
-          "SELECT * FROM messages WHERE chat_type = ? AND chat_id = ?";
-      std::vector<std::string> conditions;
-
-      // 添加时间范围条件
-      if (request->start_time() > 0) {
-        conditions.push_back(" timestamp >= ?");
-      }
-      if (request->end_time() > 0) {
-        conditions.push_back(" timestamp <= ?");
-      }
-      if (request->before_msg_id() > 0) {
-        conditions.push_back(" id < ?");
-      }
-
-      // 组合条件
-      for (const auto& condition : conditions) {
-        query += " AND" + condition;
-      }
-
-      // 添加排序和限制
-      query += " ORDER BY timestamp DESC LIMIT ?";
-
-      std::unique_ptr<sql::PreparedStatement> stmt(
-          conn->prepareStatement(query));
-      int paramIndex = 1;
-
-      stmt->setInt(paramIndex++, static_cast<int>(request->chat_type()));
-      stmt->setUInt64(paramIndex++, request->chat_id());
-
-      if (request->start_time() > 0) {
-        stmt->setUInt64(paramIndex++, request->start_time());
-      }
-      if (request->end_time() > 0) {
-        stmt->setUInt64(paramIndex++, request->end_time());
-      }
-      if (request->before_msg_id() > 0) {
-        stmt->setUInt64(paramIndex++, request->before_msg_id());
-      }
-
-      // 设置限制
-      stmt->setInt(paramIndex, request->limit() > 0 ? request->limit() : 20);
-
-      std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
-
-      // 清空之前的结果，避免重复
-      response->clear_messages();
-
-      // 处理结果
-      while (rs->next()) {
-        Message message;
-        message.setId(rs->getUInt64("id"));
-        message.setSenderId(rs->getUInt64("sender_id"));
-        message.setChatType(
-            static_cast<starrychat::ChatType>(rs->getInt("chat_type")));
-        message.setChatId(rs->getUInt64("chat_id"));
-        message.setType(
-            static_cast<starrychat::MessageType>(rs->getInt("type")));
-        message.setTimestamp(rs->getUInt64("timestamp"));
-        message.setStatus(
-            static_cast<starrychat::MessageStatus>(rs->getInt("status")));
-
-        // 根据消息类型设置内容
-        if (message.isTextMessage()) {
-          message.setText(std::string(rs->getString("content")));
-        } else if (message.isSystemMessage()) {
-          message.setSystemMessage(std::string(rs->getString("content")),
-                                   std::string(rs->getString("system_code")),
-                                   {});
-        }
-
-        // 处理回复和提及
-        if (rs->getUInt64("reply_to_id") > 0) {
-          message.setReplyToId(rs->getUInt64("reply_to_id"));
-        }
-
-        // 添加到响应
-        *response->add_messages() = message.toProto();
-
-        // 缓存消息
-        cacheMessage(message.toProto());
-      }
-
-      // 确保消息按时间倒序排列
-      std::sort(response->mutable_messages()->begin(),
-                response->mutable_messages()->end(),
-                [](const starrychat::Message& a, const starrychat::Message& b) {
-                  return a.timestamp() > b.timestamp();
-                });
-    }
-
-    // 标记成功和是否有更多消息
-    response->set_success(true);
-    response->set_has_more(response->messages_size() >= request->limit());
-
-    // 获取消息时自动重置该用户的未读计数
-    resetUnreadCount(request->user_id(), request->chat_type(),
-                     request->chat_id());
-    LOG_INFO << "Reset unread count for user " << request->user_id()
-             << " in chat type " << static_cast<int>(request->chat_type())
-             << ", chat ID " << request->chat_id();
-
-    LOG_INFO << "Successfully retrieved " << response->messages_size()
-             << " messages";
-
-  } catch (sql::SQLException& e) {
-    LOG_ERROR << "GetMessages SQL error: " << e.what();
-    response->set_success(false);
-    response->set_error_message("Database error: " + std::string(e.what()));
-  } catch (std::exception& e) {
-    LOG_ERROR << "GetMessages error: " << e.what();
-    response->set_success(false);
-    response->set_error_message("Internal error: " + std::string(e.what()));
+    // 确保消息按时间倒序排列
+    std::sort(response->mutable_messages()->begin(),
+              response->mutable_messages()->end(),
+              [](const starrychat::Message& a, const starrychat::Message& b) {
+                return a.timestamp() > b.timestamp();
+              });
   }
+
+  // 标记成功和是否有更多消息
+  response->set_success(true);
+  response->set_has_more(response->messages_size() >= request->limit());
+
+  // 获取消息时自动重置该用户的未读计数
+  resetUnreadCount(request->user_id(), request->chat_type(),
+                   request->chat_id());
+  LOG_INFO << "Reset unread count for user " << request->user_id()
+           << " in chat type " << static_cast<int>(request->chat_type())
+           << ", chat ID " << request->chat_id();
+
+  LOG_INFO << "Successfully retrieved " << response->messages_size()
+           << " messages";
 
   done(response);
 }
@@ -197,105 +198,134 @@ void MessageServiceImpl::SendMessage(
     const starry::RpcDoneCallback& done) {
   auto response = responsePrototype->New();
 
-  try {
-    // 验证用户是否为聊天成员
-    if (!isValidChatMember(request->sender_id(), request->chat_type(),
-                           request->chat_id())) {
+  // 验证用户是否为聊天成员
+  if (!isValidChatMember(request->sender_id(), request->chat_type(),
+                         request->chat_id())) {
+    response->set_success(false);
+    response->set_error_message("Not a member of this chat");
+    done(response);
+    return;
+  }
+
+  LOG_INFO << "Sending message from user " << request->sender_id()
+           << " to chat type " << static_cast<int>(request->chat_type())
+           << ", chat ID " << request->chat_id();
+
+  // 创建消息对象
+  Message message(request->sender_id(), request->chat_type(),
+                  request->chat_id());
+
+  // 设置时间戳
+  uint64_t timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+  message.setTimestamp(timestamp);
+  message.setStatus(starrychat::MESSAGE_STATUS_SENT);
+
+  // 设置消息内容
+  switch (request->type()) {
+    case starrychat::MESSAGE_TYPE_TEXT:
+      message.setType(starrychat::MESSAGE_TYPE_TEXT);
+      message.setText(request->text().text());
+      LOG_INFO << "Text message content: " << request->text().text();
+      break;
+
+    // 其他消息类型处理可以在这里添加
+    default:
       response->set_success(false);
-      response->set_error_message("Not a member of this chat");
+      response->set_error_message("Unsupported message type");
       done(response);
       return;
-    }
-
-    LOG_INFO << "Sending message from user " << request->sender_id()
-             << " to chat type " << static_cast<int>(request->chat_type())
-             << ", chat ID " << request->chat_id();
-
-    // 创建消息对象
-    Message message(request->sender_id(), request->chat_type(),
-                    request->chat_id());
-
-    // 设置时间戳
-    uint64_t timestamp =
-        std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count();
-    message.setTimestamp(timestamp);
-    message.setStatus(starrychat::MESSAGE_STATUS_SENT);
-
-    // 设置消息内容
-    switch (request->type()) {
-      case starrychat::MESSAGE_TYPE_TEXT:
-        message.setType(starrychat::MESSAGE_TYPE_TEXT);
-        message.setText(request->text().text());
-        LOG_INFO << "Text message content: " << request->text().text();
-        break;
-
-      // 其他消息类型处理可以在这里添加
-      default:
-        response->set_success(false);
-        response->set_error_message("Unsupported message type");
-        done(response);
-        return;
-    }
-
-    // 设置关联信息
-    if (request->reply_to_id() > 0) {
-      message.setReplyToId(request->reply_to_id());
-    }
-
-    for (int i = 0; i < request->mention_user_ids_size(); i++) {
-      message.addMentionUserId(request->mention_user_ids(i));
-    }
-
-    // 保存消息到数据库
-    uint64_t messageId = saveMessageToDatabase(message.toProto());
-
-    if (messageId > 0) {
-      message.setId(messageId);
-
-      // 缓存消息
-      cacheMessage(message.toProto());
-
-      // 更新消息时间线
-      updateMessageTimeline(message.getChatType(), message.getChatId(),
-                            messageId, message.getTimestamp());
-
-      // 发布消息通知
-      publishMessageNotification(message.toProto());
-
-      // 更新最后一条消息信息
-      updateLastMessage(message.getChatType(), message.getChatId(),
-                        message.toProto());
-
-      // 增加其他用户的未读消息计数
-      auto members = getChatMembers(message.getChatType(), message.getChatId());
-      for (uint64_t memberId : members) {
-        if (memberId != message.getSenderId()) {
-          incrementUnreadCount(memberId, message.getChatType(),
-                               message.getChatId());
-        }
-      }
-
-      // 设置响应
-      response->set_success(true);
-      *response->mutable_message() = message.toProto();
-
-      LOG_INFO << "Message sent successfully. ID: " << messageId;
-    } else {
-      response->set_success(false);
-      response->set_error_message("Failed to save message");
-      LOG_ERROR << "Failed to save message to database";
-    }
-  } catch (sql::SQLException& e) {
-    LOG_ERROR << "SendMessage SQL error: " << e.what();
-    response->set_success(false);
-    response->set_error_message("Database error: " + std::string(e.what()));
-  } catch (std::exception& e) {
-    LOG_ERROR << "SendMessage error: " << e.what();
-    response->set_success(false);
-    response->set_error_message("Internal error: " + std::string(e.what()));
   }
+
+  // 设置关联信息
+  if (request->reply_to_id() > 0) {
+    message.setReplyToId(request->reply_to_id());
+  }
+
+  for (int i = 0; i < request->mention_user_ids_size(); i++) {
+    message.addMentionUserId(request->mention_user_ids(i));
+  }
+
+  // 保存消息到数据库
+  uint64_t messageId = 0;
+
+  // 根据是否有回复ID，使用不同的SQL插入
+  bool success = false;
+  if (message.getReplyToId() > 0) {
+    success = DBManager::executeUpdateWithGeneratedKey(
+        "INSERT INTO messages (sender_id, chat_type, chat_id, type, content, "
+        "timestamp, status, reply_to_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        messageId, message.getSenderId(),
+        static_cast<int>(message.getChatType()), message.getChatId(),
+        static_cast<int>(message.getType()), message.getText(),
+        message.getTimestamp(), static_cast<int>(message.getStatus()),
+        message.getReplyToId());
+  } else {
+    success = DBManager::executeUpdateWithGeneratedKey(
+        "INSERT INTO messages (sender_id, chat_type, chat_id, type, content, "
+        "timestamp, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        messageId, message.getSenderId(),
+        static_cast<int>(message.getChatType()), message.getChatId(),
+        static_cast<int>(message.getType()), message.getText(),
+        message.getTimestamp(), static_cast<int>(message.getStatus()));
+  }
+
+  if (!success) {
+    LOG_ERROR << "Failed to save message from user " << message.getSenderId()
+              << " to chat type " << static_cast<int>(message.getChatType())
+              << ", chat ID " << message.getChatId();
+    response->set_success(false);
+    response->set_error_message("Failed to save message");
+    done(response);
+    return;
+  }
+
+  // 处理@提及用户
+  if (!message.getMentionUserIds().empty()) {
+    for (uint64_t mentionUserId : message.getMentionUserIds()) {
+      if (!DBManager::executeUpdate("INSERT INTO message_mentions (message_id, "
+                                    "user_id) VALUES (?, ?)",
+                                    messageId, mentionUserId)) {
+        LOG_ERROR << "Failed to save message mention for message ID "
+                  << messageId << ", user ID " << mentionUserId;
+      }
+    }
+  }
+
+  // 设置消息ID
+  message.setId(messageId);
+
+  // 缓存消息
+  cacheMessage(message.toProto());
+
+  // 更新消息时间线
+  updateMessageTimeline(message.getChatType(), message.getChatId(), messageId,
+                        message.getTimestamp());
+
+  // 发布消息通知
+  publishMessageNotification(message.toProto());
+
+  // 更新最后一条消息信息
+  updateLastMessage(message.getChatType(), message.getChatId(),
+                    message.toProto());
+
+  // 增加其他用户的未读消息计数
+  auto members = getChatMembers(message.getChatType(), message.getChatId());
+  for (uint64_t memberId : members) {
+    if (memberId != message.getSenderId()) {
+      incrementUnreadCount(memberId, message.getChatType(),
+                           message.getChatId());
+    }
+  }
+
+  // 设置响应
+  response->set_success(true);
+  *response->mutable_message() = message.toProto();
+
+  LOG_INFO << "Message sent successfully. ID: " << messageId;
 
   done(response);
 }
@@ -307,79 +337,73 @@ void MessageServiceImpl::UpdateMessageStatus(
     const starry::RpcDoneCallback& done) {
   auto response = responsePrototype->New();
 
-  try {
-    auto conn = getConnection();
-    if (!conn) {
-      response->set_success(false);
-      response->set_error_message("Database connection failed");
-      done(response);
-      return;
-    }
-
-    // 验证消息存在并且用户有权更新
-    std::unique_ptr<sql::PreparedStatement> checkStmt(conn->prepareStatement(
-        "SELECT chat_type, chat_id, sender_id FROM messages WHERE id = ?"));
-    checkStmt->setUInt64(1, request->message_id());
-
-    std::unique_ptr<sql::ResultSet> checkRs(checkStmt->executeQuery());
-    if (!checkRs->next()) {
-      response->set_success(false);
-      response->set_error_message("Message not found");
-      done(response);
-      return;
-    }
-
-    starrychat::ChatType chatType =
-        static_cast<starrychat::ChatType>(checkRs->getInt("chat_type"));
-    uint64_t chatId = checkRs->getUInt64("chat_id");
-    uint64_t senderId = checkRs->getUInt64("sender_id");
-
-    // 验证用户是否为聊天成员
-    if (!isValidChatMember(request->user_id(), chatType, chatId)) {
-      response->set_success(false);
-      response->set_error_message("Not a member of this chat");
-      done(response);
-      return;
-    }
-
-    // 更新消息状态
-    if (updateMessageStatusInDB(request->message_id(), request->status())) {
-      // 更新缓存中的消息状态
-      auto cachedMessage = getMessageFromCache(request->message_id());
-      if (cachedMessage) {
-        starrychat::Message updatedMessage = *cachedMessage;
-        updatedMessage.set_status(request->status());
-        cacheMessage(updatedMessage);
-      }
-
-      // 发布状态变更通知
-      publishStatusChangeNotification(request->message_id(), request->status());
-
-      // 如果是标记为已读，并且当前用户是接收方（非发送方），则减少未读计数
-      if (request->status() == starrychat::MESSAGE_STATUS_READ &&
-          request->user_id() != senderId) {
-        // 此处可以选择减少单条消息的未读计数，但通常直接重置更简单
-        resetUnreadCount(request->user_id(), chatType, chatId);
-      }
-
-      response->set_success(true);
-      LOG_INFO << "Updated status for message " << request->message_id()
-               << " to " << static_cast<int>(request->status());
-    } else {
-      response->set_success(false);
-      response->set_error_message("Failed to update message status");
-      LOG_ERROR << "Failed to update status for message "
-                << request->message_id();
-    }
-  } catch (sql::SQLException& e) {
-    LOG_ERROR << "UpdateMessageStatus SQL error: " << e.what();
+  // 验证消息存在并且用户有权更新
+  std::unique_ptr<sql::ResultSet> rs;
+  if (!DBManager::executeQuery(
+          "SELECT chat_type, chat_id, sender_id FROM messages WHERE id = ?", rs,
+          request->message_id())) {
+    LOG_ERROR << "Failed to query message info for status update, message ID: "
+              << request->message_id();
     response->set_success(false);
-    response->set_error_message("Database error: " + std::string(e.what()));
-  } catch (std::exception& e) {
-    LOG_ERROR << "UpdateMessageStatus error: " << e.what();
-    response->set_success(false);
-    response->set_error_message("Internal error: " + std::string(e.what()));
+    response->set_error_message("Failed to retrieve message information");
+    done(response);
+    return;
   }
+
+  if (!rs->next()) {
+    response->set_success(false);
+    response->set_error_message("Message not found");
+    done(response);
+    return;
+  }
+
+  starrychat::ChatType chatType =
+      static_cast<starrychat::ChatType>(rs->getInt("chat_type"));
+  uint64_t chatId = rs->getUInt64("chat_id");
+  uint64_t senderId = rs->getUInt64("sender_id");
+
+  // 验证用户是否为聊天成员
+  if (!isValidChatMember(request->user_id(), chatType, chatId)) {
+    response->set_success(false);
+    response->set_error_message("Not a member of this chat");
+    done(response);
+    return;
+  }
+
+  // 更新消息状态
+  if (!DBManager::executeUpdate("UPDATE messages SET status = ? WHERE id = ?",
+                                static_cast<int>(request->status()),
+                                request->message_id())) {
+    LOG_ERROR << "Failed to update message status for message ID: "
+              << request->message_id()
+              << " to status: " << static_cast<int>(request->status());
+    response->set_success(false);
+    response->set_error_message("Failed to update message status");
+    done(response);
+    return;
+  }
+
+  // 更新缓存中的消息状态
+  auto cachedMessage = getMessageFromCache(request->message_id());
+  if (cachedMessage) {
+    starrychat::Message updatedMessage = *cachedMessage;
+    updatedMessage.set_status(request->status());
+    cacheMessage(updatedMessage);
+  }
+
+  // 发布状态变更通知
+  publishStatusChangeNotification(request->message_id(), request->status());
+
+  // 如果是标记为已读，并且当前用户是接收方（非发送方），则减少未读计数
+  if (request->status() == starrychat::MESSAGE_STATUS_READ &&
+      request->user_id() != senderId) {
+    // 此处可以选择减少单条消息的未读计数，但通常直接重置更简单
+    resetUnreadCount(request->user_id(), chatType, chatId);
+  }
+
+  response->set_success(true);
+  LOG_INFO << "Updated status for message " << request->message_id() << " to "
+           << static_cast<int>(request->status());
 
   done(response);
 }
@@ -391,115 +415,114 @@ void MessageServiceImpl::RecallMessage(
     const starry::RpcDoneCallback& done) {
   auto response = responsePrototype->New();
 
-  try {
-    auto conn = getConnection();
-    if (!conn) {
-      response->set_success(false);
-      response->set_error_message("Database connection failed");
-      done(response);
-      return;
-    }
-
-    // 验证消息存在并且用户有权撤回
-    std::unique_ptr<sql::PreparedStatement> checkStmt(
-        conn->prepareStatement("SELECT sender_id, chat_type, chat_id, "
-                               "timestamp FROM messages WHERE id = ?"));
-    checkStmt->setUInt64(1, request->message_id());
-
-    std::unique_ptr<sql::ResultSet> checkRs(checkStmt->executeQuery());
-    if (!checkRs->next()) {
-      response->set_success(false);
-      response->set_error_message("Message not found");
-      done(response);
-      return;
-    }
-
-    uint64_t senderId = checkRs->getUInt64("sender_id");
-    uint64_t timestamp = checkRs->getUInt64("timestamp");
-    uint64_t currentTime =
-        std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count();
-    starrychat::ChatType chatType =
-        static_cast<starrychat::ChatType>(checkRs->getInt("chat_type"));
-    uint64_t chatId = checkRs->getUInt64("chat_id");
-
-    // 检查是否为消息发送者
-    if (senderId != request->user_id()) {
-      response->set_success(false);
-      response->set_error_message("You can only recall your own messages");
-      done(response);
-      return;
-    }
-
-    // 检查是否在可撤回时间内（例如2分钟）
-    if (currentTime - timestamp > 120) {
-      response->set_success(false);
-      response->set_error_message(
-          "Messages can only be recalled within 2 minutes of sending");
-      done(response);
-      return;
-    }
-
-    // 更新消息状态为已撤回
-    if (updateMessageStatusInDB(request->message_id(),
-                                starrychat::MESSAGE_STATUS_RECALLED)) {
-      // 更新缓存中的消息状态
-      auto cachedMessage = getMessageFromCache(request->message_id());
-      if (cachedMessage) {
-        starrychat::Message updatedMessage = *cachedMessage;
-        updatedMessage.set_status(starrychat::MESSAGE_STATUS_RECALLED);
-        cacheMessage(updatedMessage);
-      }
-
-      // 创建撤回通知消息
-      Message recallNotice(request->user_id(), chatType, chatId);
-      recallNotice.setType(starrychat::MESSAGE_TYPE_RECALL);
-      recallNotice.setTimestamp(currentTime);
-      recallNotice.setStatus(starrychat::MESSAGE_STATUS_SENT);
-
-      // 设置撤回内容
-      starrychat::RecallContent recallContent;
-      recallContent.set_recalled_msg_id(request->message_id());
-
-      // 保存撤回通知
-      uint64_t noticeId = saveMessageToDatabase(recallNotice.toProto());
-      if (noticeId > 0) {
-        recallNotice.setId(noticeId);
-
-        // 缓存通知消息
-        cacheMessage(recallNotice.toProto());
-
-        // 更新消息时间线
-        updateMessageTimeline(recallNotice.getChatType(),
-                              recallNotice.getChatId(), noticeId,
-                              recallNotice.getTimestamp());
-
-        // 发布通知
-        publishMessageNotification(recallNotice.toProto());
-      }
-
-      // 发布撤回通知
-      publishStatusChangeNotification(request->message_id(),
-                                      starrychat::MESSAGE_STATUS_RECALLED);
-
-      response->set_success(true);
-      LOG_INFO << "Message " << request->message_id() << " recalled by user "
-               << request->user_id();
-    } else {
-      response->set_success(false);
-      response->set_error_message("Failed to recall message");
-      LOG_ERROR << "Failed to recall message " << request->message_id();
-    }
-  } catch (sql::SQLException& e) {
-    LOG_ERROR << "RecallMessage SQL error: " << e.what();
+  // 验证消息存在并且用户有权撤回
+  std::unique_ptr<sql::ResultSet> rs;
+  if (!DBManager::executeQuery("SELECT sender_id, chat_type, chat_id, "
+                               "timestamp FROM messages WHERE id = ?",
+                               rs, request->message_id())) {
+    LOG_ERROR << "Failed to query message for recall, message ID: "
+              << request->message_id();
     response->set_success(false);
-    response->set_error_message("Database error: " + std::string(e.what()));
-  } catch (std::exception& e) {
-    LOG_ERROR << "RecallMessage error: " << e.what();
-    response->set_success(false);
-    response->set_error_message("Internal error: " + std::string(e.what()));
+    response->set_error_message("Failed to retrieve message information");
+    done(response);
+    return;
   }
+
+  if (!rs->next()) {
+    response->set_success(false);
+    response->set_error_message("Message not found");
+    done(response);
+    return;
+  }
+
+  uint64_t senderId = rs->getUInt64("sender_id");
+  uint64_t timestamp = rs->getUInt64("timestamp");
+  uint64_t currentTime =
+      std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  starrychat::ChatType chatType =
+      static_cast<starrychat::ChatType>(rs->getInt("chat_type"));
+  uint64_t chatId = rs->getUInt64("chat_id");
+
+  // 检查是否为消息发送者
+  if (senderId != request->user_id()) {
+    response->set_success(false);
+    response->set_error_message("You can only recall your own messages");
+    done(response);
+    return;
+  }
+
+  // 检查是否在可撤回时间内（例如2分钟）
+  if (currentTime - timestamp > 120) {
+    response->set_success(false);
+    response->set_error_message(
+        "Messages can only be recalled within 2 minutes of sending");
+    done(response);
+    return;
+  }
+
+  // 更新消息状态为已撤回
+  if (!DBManager::executeUpdate(
+          "UPDATE messages SET status = ? WHERE id = ?",
+          static_cast<int>(starrychat::MESSAGE_STATUS_RECALLED),
+          request->message_id())) {
+    LOG_ERROR << "Failed to update message status to recalled for message ID: "
+              << request->message_id();
+    response->set_success(false);
+    response->set_error_message("Failed to recall message");
+    done(response);
+    return;
+  }
+
+  // 更新缓存中的消息状态
+  auto cachedMessage = getMessageFromCache(request->message_id());
+  if (cachedMessage) {
+    starrychat::Message updatedMessage = *cachedMessage;
+    updatedMessage.set_status(starrychat::MESSAGE_STATUS_RECALLED);
+    cacheMessage(updatedMessage);
+  }
+
+  // 创建撤回通知消息
+  Message recallNotice(request->user_id(), chatType, chatId);
+  recallNotice.setType(starrychat::MESSAGE_TYPE_RECALL);
+  recallNotice.setTimestamp(currentTime);
+  recallNotice.setStatus(starrychat::MESSAGE_STATUS_SENT);
+
+  // 保存撤回通知
+  uint64_t noticeId = 0;
+  if (!DBManager::executeUpdateWithGeneratedKey(
+          "INSERT INTO messages (sender_id, chat_type, chat_id, type, "
+          "timestamp, status) "
+          "VALUES (?, ?, ?, ?, ?, ?)",
+          noticeId, recallNotice.getSenderId(),
+          static_cast<int>(recallNotice.getChatType()),
+          recallNotice.getChatId(), static_cast<int>(recallNotice.getType()),
+          recallNotice.getTimestamp(),
+          static_cast<int>(recallNotice.getStatus()))) {
+    LOG_ERROR << "Failed to save recall notice for message ID: "
+              << request->message_id();
+  } else {
+    recallNotice.setId(noticeId);
+
+    // 缓存通知消息
+    cacheMessage(recallNotice.toProto());
+
+    // 更新消息时间线
+    updateMessageTimeline(recallNotice.getChatType(), recallNotice.getChatId(),
+                          noticeId, recallNotice.getTimestamp());
+
+    // 发布通知
+    publishMessageNotification(recallNotice.toProto());
+  }
+
+  // 发布撤回通知
+  publishStatusChangeNotification(request->message_id(),
+                                  starrychat::MESSAGE_STATUS_RECALLED);
+
+  response->set_success(true);
+  LOG_INFO << "Message " << request->message_id() << " recalled by user "
+           << request->user_id();
 
   done(response);
 }
@@ -508,185 +531,74 @@ void MessageServiceImpl::RecallMessage(
 bool MessageServiceImpl::isValidChatMember(uint64_t userId,
                                            starrychat::ChatType chatType,
                                            uint64_t chatId) {
-  try {
-    // 先尝试从Redis缓存验证
-    auto& redis = RedisManager::getInstance();
+  // 先尝试从Redis缓存验证
+  auto& redis = RedisManager::getInstance();
 
-    if (chatType == starrychat::CHAT_TYPE_PRIVATE) {
-      // 私聊检查 - 检查用户是否是私聊的参与者
-      std::string privateKey =
-          "private_chat:" + std::to_string(chatId) + ":members";
-      auto members = redis.smembers(privateKey);
-      if (members && !members->empty()) {
-        std::string userIdStr = std::to_string(userId);
-        return std::find(members->begin(), members->end(), userIdStr) !=
-               members->end();
-      }
-    } else if (chatType == starrychat::CHAT_TYPE_GROUP) {
-      // 群聊检查 - 检查用户是否是群聊成员
-      std::string groupKey = "chat_room:" + std::to_string(chatId) + ":members";
-      auto members = redis.smembers(groupKey);
-      if (members && !members->empty()) {
-        std::string userIdStr = std::to_string(userId);
-        return std::find(members->begin(), members->end(), userIdStr) !=
-               members->end();
-      }
+  if (chatType == starrychat::CHAT_TYPE_PRIVATE) {
+    // 私聊检查 - 检查用户是否是私聊的参与者
+    std::string privateKey =
+        "private_chat:" + std::to_string(chatId) + ":members";
+    auto members = redis.smembers(privateKey);
+    if (members && !members->empty()) {
+      std::string userIdStr = std::to_string(userId);
+      return std::find(members->begin(), members->end(), userIdStr) !=
+             members->end();
     }
+  } else if (chatType == starrychat::CHAT_TYPE_GROUP) {
+    // 群聊检查 - 检查用户是否是群聊成员
+    std::string groupKey = "chat_room:" + std::to_string(chatId) + ":members";
+    auto members = redis.smembers(groupKey);
+    if (members && !members->empty()) {
+      std::string userIdStr = std::to_string(userId);
+      return std::find(members->begin(), members->end(), userIdStr) !=
+             members->end();
+    }
+  }
 
-    // 缓存未命中，从数据库查询
-    auto conn = getConnection();
-    if (!conn) {
+  // 缓存未命中，从数据库查询
+  if (chatType == starrychat::CHAT_TYPE_PRIVATE) {
+    // 私聊检查
+    std::unique_ptr<sql::ResultSet> rs;
+    if (!DBManager::executeQuery("SELECT 1 FROM private_chats WHERE id = ? AND "
+                                 "(user1_id = ? OR user2_id = ?)",
+                                 rs, chatId, userId, userId)) {
+      LOG_ERROR << "Failed to check if user " << userId
+                << " is member of private chat " << chatId;
       return false;
     }
 
-    if (chatType == starrychat::CHAT_TYPE_PRIVATE) {
-      // 私聊检查
-      std::unique_ptr<sql::PreparedStatement> stmt(
-          conn->prepareStatement("SELECT 1 FROM private_chats WHERE id = ? AND "
-                                 "(user1_id = ? OR user2_id = ?)"));
-      stmt->setUInt64(1, chatId);
-      stmt->setUInt64(2, userId);
-      stmt->setUInt64(3, userId);
+    bool result = rs->next();
 
-      std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
-      bool result = rs->next();
-
-      // 缓存结果
-      if (result) {
-        redis.sadd("private_chat:" + std::to_string(chatId) + ":members",
-                   std::to_string(userId));
-      }
-
-      return result;
-    } else if (chatType == starrychat::CHAT_TYPE_GROUP) {
-      // 群聊检查
-      std::unique_ptr<sql::PreparedStatement> stmt(
-          conn->prepareStatement("SELECT 1 FROM chat_room_members WHERE "
-                                 "chat_room_id = ? AND user_id = ?"));
-      stmt->setUInt64(1, chatId);
-      stmt->setUInt64(2, userId);
-
-      std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
-      bool result = rs->next();
-
-      // 缓存结果
-      if (result) {
-        redis.sadd("chat_room:" + std::to_string(chatId) + ":members",
-                   std::to_string(userId));
-      }
-
-      return result;
+    // 缓存结果
+    if (result) {
+      redis.sadd("private_chat:" + std::to_string(chatId) + ":members",
+                 std::to_string(userId));
     }
 
-    return false;
-  } catch (std::exception& e) {
-    LOG_ERROR << "isValidChatMember error: " << e.what();
-    return false;
-  }
-}
-
-// 保存消息到数据库
-uint64_t MessageServiceImpl::saveMessageToDatabase(
-    const starrychat::Message& message) {
-  try {
-    auto conn = getConnection();
-    if (!conn) {
-      return 0;
-    }
-
-    // 准备SQL
-    std::string query =
-        "INSERT INTO messages (sender_id, chat_type, chat_id, type, content, "
-        "system_code, timestamp, status, reply_to_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
-    std::unique_ptr<sql::PreparedStatement> stmt(
-        conn->prepareStatement(query, sql::Statement::RETURN_GENERATED_KEYS));
-
-    stmt->setUInt64(1, message.sender_id());
-    stmt->setInt(2, message.chat_type());
-    stmt->setUInt64(3, message.chat_id());
-    stmt->setInt(4, message.type());
-
-    // 设置内容
-    if (message.type() == starrychat::MESSAGE_TYPE_TEXT && message.has_text()) {
-      stmt->setString(5, message.text().text());
-      stmt->setNull(6, sql::DataType::VARCHAR);
-    } else if (message.type() == starrychat::MESSAGE_TYPE_SYSTEM &&
-               message.has_system()) {
-      stmt->setString(5, message.system().text());
-      stmt->setString(6, message.system().code());
-    } else {
-      stmt->setNull(5, sql::DataType::VARCHAR);
-      stmt->setNull(6, sql::DataType::VARCHAR);
-    }
-
-    stmt->setUInt64(7, message.timestamp());
-    stmt->setInt(8, message.status());
-
-    if (message.reply_to_id() > 0) {
-      stmt->setUInt64(9, message.reply_to_id());
-    } else {
-      stmt->setNull(9, sql::DataType::BIGINT);
-    }
-
-    if (stmt->executeUpdate() > 0) {
-      std::unique_ptr<sql::ResultSet> rs(stmt->getGeneratedKeys());
-      if (rs->next()) {
-        uint64_t messageId = rs->getUInt64(1);
-
-        // 处理提及用户
-        if (message.mention_user_ids_size() > 0) {
-          std::string mentionQuery =
-              "INSERT INTO message_mentions (message_id, user_id) VALUES (?, "
-              "?)";
-          std::unique_ptr<sql::PreparedStatement> mentionStmt(
-              conn->prepareStatement(mentionQuery));
-
-          for (int i = 0; i < message.mention_user_ids_size(); i++) {
-            mentionStmt->setUInt64(1, messageId);
-            mentionStmt->setUInt64(2, message.mention_user_ids(i));
-            mentionStmt->executeUpdate();
-          }
-        }
-
-        return messageId;
-      }
-    }
-
-    return 0;
-  } catch (sql::SQLException& e) {
-    LOG_ERROR << "saveMessageToDatabase SQL error: " << e.what();
-    return 0;
-  } catch (std::exception& e) {
-    LOG_ERROR << "saveMessageToDatabase error: " << e.what();
-    return 0;
-  }
-}
-
-// 更新数据库中的消息状态
-bool MessageServiceImpl::updateMessageStatusInDB(
-    uint64_t messageId,
-    starrychat::MessageStatus status) {
-  try {
-    auto conn = getConnection();
-    if (!conn) {
+    return result;
+  } else if (chatType == starrychat::CHAT_TYPE_GROUP) {
+    // 群聊检查
+    std::unique_ptr<sql::ResultSet> rs;
+    if (!DBManager::executeQuery("SELECT 1 FROM chat_room_members WHERE "
+                                 "chat_room_id = ? AND user_id = ?",
+                                 rs, chatId, userId)) {
+      LOG_ERROR << "Failed to check if user " << userId
+                << " is member of chat room " << chatId;
       return false;
     }
 
-    std::unique_ptr<sql::PreparedStatement> stmt(
-        conn->prepareStatement("UPDATE messages SET status = ? WHERE id = ?"));
-    stmt->setInt(1, static_cast<int>(status));
-    stmt->setUInt64(2, messageId);
+    bool result = rs->next();
 
-    return stmt->executeUpdate() > 0;
-  } catch (sql::SQLException& e) {
-    LOG_ERROR << "updateMessageStatusInDB SQL error: " << e.what();
-    return false;
-  } catch (std::exception& e) {
-    LOG_ERROR << "updateMessageStatusInDB error: " << e.what();
-    return false;
+    // 缓存结果
+    if (result) {
+      redis.sadd("chat_room:" + std::to_string(chatId) + ":members",
+                 std::to_string(userId));
+    }
+
+    return result;
   }
+
+  return false;
 }
 
 // 缓存消息
@@ -798,7 +710,6 @@ void MessageServiceImpl::updateMessageTimeline(starrychat::ChatType chatType,
 }
 
 // 获取最近消息ID列表
-// 获取最近消息ID列表
 std::vector<uint64_t> MessageServiceImpl::getRecentMessageIds(
     starrychat::ChatType chatType,
     uint64_t chatId,
@@ -898,34 +809,7 @@ void MessageServiceImpl::publishStatusChangeNotification(
 
     // 获取消息信息
     auto cachedMessage = getMessageFromCache(messageId);
-    if (!cachedMessage) {
-      auto conn = getConnection();
-      if (!conn) {
-        return;
-      }
-
-      std::unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
-          "SELECT chat_type, chat_id FROM messages WHERE id = ?"));
-      stmt->setUInt64(1, messageId);
-
-      std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
-      if (!rs->next()) {
-        return;
-      }
-
-      starrychat::ChatType chatType =
-          static_cast<starrychat::ChatType>(rs->getInt("chat_type"));
-      uint64_t chatId = rs->getUInt64("chat_id");
-
-      // 发布状态变更通知
-      std::string channel =
-          "chat:message:status:" + std::to_string(static_cast<int>(chatType)) +
-          ":" + std::to_string(chatId);
-      std::string message = std::to_string(messageId) + ":" +
-                            std::to_string(static_cast<int>(status));
-
-      redis.publish(channel, message);
-    } else {
+    if (cachedMessage) {
       // 发布状态变更通知
       std::string channel =
           "chat:message:status:" +
@@ -935,10 +819,39 @@ void MessageServiceImpl::publishStatusChangeNotification(
                             std::to_string(static_cast<int>(status));
 
       redis.publish(channel, message);
-    }
 
-    LOG_INFO << "Published status change notification for message " << messageId
-             << " to status " << static_cast<int>(status);
+      LOG_INFO << "Published status change notification for message "
+               << messageId << " to status " << static_cast<int>(status);
+    } else {
+      // 如果消息不在缓存中，从数据库查询
+      std::unique_ptr<sql::ResultSet> rs;
+      if (!DBManager::executeQuery(
+              "SELECT chat_type, chat_id FROM messages WHERE id = ?", rs,
+              messageId)) {
+        LOG_ERROR << "Failed to query message info for status notification, "
+                     "message ID: "
+                  << messageId;
+        return;
+      }
+
+      if (rs->next()) {
+        starrychat::ChatType chatType =
+            static_cast<starrychat::ChatType>(rs->getInt("chat_type"));
+        uint64_t chatId = rs->getUInt64("chat_id");
+
+        // 发布状态变更通知
+        std::string channel = "chat:message:status:" +
+                              std::to_string(static_cast<int>(chatType)) + ":" +
+                              std::to_string(chatId);
+        std::string message = std::to_string(messageId) + ":" +
+                              std::to_string(static_cast<int>(status));
+
+        redis.publish(channel, message);
+
+        LOG_INFO << "Published status change notification for message "
+                 << messageId << " to status " << static_cast<int>(status);
+      }
+    }
   } catch (std::exception& e) {
     LOG_ERROR << "publishStatusChangeNotification error: " << e.what();
   }
@@ -1046,18 +959,16 @@ std::vector<uint64_t> MessageServiceImpl::getChatMembers(
     }
 
     // 缓存未命中，从数据库查询
-    auto conn = getConnection();
-    if (!conn) {
-      return members;
-    }
-
     if (chatType == starrychat::CHAT_TYPE_PRIVATE) {
       // 私聊成员
-      std::unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
-          "SELECT user1_id, user2_id FROM private_chats WHERE id = ?"));
-      stmt->setUInt64(1, chatId);
+      std::unique_ptr<sql::ResultSet> rs;
+      if (!DBManager::executeQuery(
+              "SELECT user1_id, user2_id FROM private_chats WHERE id = ?", rs,
+              chatId)) {
+        LOG_ERROR << "Failed to query members for private chat ID: " << chatId;
+        return members;
+      }
 
-      std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
       if (rs->next()) {
         uint64_t user1Id = rs->getUInt64("user1_id");
         uint64_t user2Id = rs->getUInt64("user2_id");
@@ -1073,11 +984,14 @@ std::vector<uint64_t> MessageServiceImpl::getChatMembers(
       }
     } else if (chatType == starrychat::CHAT_TYPE_GROUP) {
       // 群聊成员
-      std::unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
-          "SELECT user_id FROM chat_room_members WHERE chat_room_id = ?"));
-      stmt->setUInt64(1, chatId);
+      std::unique_ptr<sql::ResultSet> rs;
+      if (!DBManager::executeQuery(
+              "SELECT user_id FROM chat_room_members WHERE chat_room_id = ?",
+              rs, chatId)) {
+        LOG_ERROR << "Failed to query members for chat room ID: " << chatId;
+        return members;
+      }
 
-      std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
       std::string key = "chat_room:" + std::to_string(chatId) + ":members";
 
       while (rs->next()) {
@@ -1090,8 +1004,6 @@ std::vector<uint64_t> MessageServiceImpl::getChatMembers(
 
       redis.expire(key, std::chrono::hours(24));
     }
-  } catch (sql::SQLException& e) {
-    LOG_ERROR << "getChatMembers SQL error: " << e.what();
   } catch (std::exception& e) {
     LOG_ERROR << "getChatMembers error: " << e.what();
   }
@@ -1117,19 +1029,17 @@ std::string MessageServiceImpl::getLastMessagePreview(
     }
 
     // 缓存未命中，从数据库查询
-    auto conn = getConnection();
-    if (!conn) {
+    std::unique_ptr<sql::ResultSet> rs;
+    if (!DBManager::executeQuery(
+            "SELECT type, content, system_code FROM messages "
+            "WHERE chat_type = ? AND chat_id = ? "
+            "ORDER BY timestamp DESC LIMIT 1",
+            rs, static_cast<int>(chatType), chatId)) {
+      LOG_ERROR << "Failed to query last message for chat type: "
+                << static_cast<int>(chatType) << ", chat ID: " << chatId;
       return "";
     }
 
-    std::unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
-        "SELECT type, content, system_code FROM messages "
-        "WHERE chat_type = ? AND chat_id = ? "
-        "ORDER BY timestamp DESC LIMIT 1"));
-    stmt->setInt(1, static_cast<int>(chatType));
-    stmt->setUInt64(2, chatId);
-
-    std::unique_ptr<sql::ResultSet> rs(stmt->executeQuery());
     if (rs->next()) {
       starrychat::MessageType msgType =
           static_cast<starrychat::MessageType>(rs->getInt("type"));
@@ -1166,8 +1076,6 @@ std::string MessageServiceImpl::getLastMessagePreview(
 
       return previewText;
     }
-  } catch (sql::SQLException& e) {
-    LOG_ERROR << "getLastMessagePreview SQL error: " << e.what();
   } catch (std::exception& e) {
     LOG_ERROR << "getLastMessagePreview error: " << e.what();
   }
@@ -1225,21 +1133,6 @@ void MessageServiceImpl::updateLastMessage(starrychat::ChatType chatType,
   } catch (std::exception& e) {
     LOG_ERROR << "updateLastMessage error: " << e.what();
   }
-}
-
-// 验证会话令牌
-bool MessageServiceImpl::validateSession(const std::string& token,
-                                         uint64_t userId) {
-  auto& redis = RedisManager::getInstance();
-
-  // 检查会话token是否存在
-  auto sessionUserId = redis.get("session:" + token);
-  if (!sessionUserId) {
-    return false;
-  }
-
-  // 验证用户ID是否匹配
-  return std::stoull(*sessionUserId) == userId;
 }
 
 }  // namespace StarryChat
